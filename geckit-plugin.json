@@ -1,0 +1,17 @@
+{
+  "apiVersion": 1,
+  "entry": "index.mjs",
+  "provider": {
+    "id": "claude-tmux",
+    "family": "claude",
+    "transport": "tmux",
+    "name": "Claude Code (tmux)",
+    "shortName": "Claude",
+    "icon": "claude",
+    "browser": "claude",
+    "loginCommand": "claude auth login",
+    "planName": "Claude",
+    "localOnly": true,
+    "source": "https://github.com/anetrebskii/geckit-claude-tmux"
+  }
+}
