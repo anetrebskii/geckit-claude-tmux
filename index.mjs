@@ -1,61 +1,89 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+const typingDelay = () => 15 + Math.floor(Math.random() * 31);
 const object = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 const string = (value) => typeof value === "string" ? value : "";
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-const terminalArgs = (options, settings, sourceArgs) => [
-  "--permission-mode",
-  options.mode,
-  "--settings",
-  settings,
-  ...sourceArgs(),
+const terminalArgs = (options, config) => [
+  "--permission-mode", options.mode,
+  "--settings", JSON.stringify({ claudeMdExcludes: [join(config, "GECKIT.md")] }),
   ...options.model === void 0 ? [] : ["--model", options.model],
   ...options.resume ? ["--resume", options.id] : ["--session-id", options.id],
-  ...options.resume || options.fork === void 0 ? [] : [
-    "--fork-session",
-    "--resume",
-    options.fork.from,
-    ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]
-  ]
+  ...options.resume || options.fork === void 0 ? [] : ["--fork-session", "--resume", options.fork.from, ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]]
 ];
+
+const plain = (text) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replaceAll('\u00a0', ' ')
+
+function terminalScreen(text) {
+  const lines = plain(text).split('\n').map((line) => line.trimEnd())
+  const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join('\n')) && /Enter to confirm/i.test(text)
+  const trustFocus = lines.some((line) => /^\s*❯\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*❯\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1
+  const selected = lines.findLastIndex((line) => /^\s*❯\s*\d+[.)]\s+/.test(line))
+  if (selected !== -1 && /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join('\n'))) {
+    const choice = /^\s*(?:❯\s*)?(\d+)[.)]\s+(.+)$/
+    const groups = []
+    for (const [at, line] of lines.entries()) {
+      const match = choice.exec(line)
+      if (match === null) continue
+      const option = { at, number: Number(match[1]), label: match[2].trim() }
+      if (option.number !== (groups.at(-1)?.at(-1)?.number ?? 0) + 1) groups.push([])
+      if (groups.length === 0) groups.push([])
+      groups.at(-1).push(option)
+    }
+    const group = groups.find((options) => options.some((option) => option.at === selected)) ?? []
+    const first = group[0]?.at ?? selected
+    const border = lines.slice(0, first).findLastIndex((line) => /^\s*[─━-]{3}/.test(line))
+    const above = lines.slice(border + 1, first).filter((line) => line.trim() !== '')
+    const title = above.slice(-6).map((line) => line.trim()).join('\n') || 'Choose an option'
+    const options = group.map(({ number, label }) => ({ number, label }))
+    const focus = group.findIndex((option) => option.at === selected)
+    const signature = JSON.stringify({ title, options })
+    return { kind: 'question', title, options, focus, signature, trust, trustFocus }
+  }
+  const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line))
+  const prompt = lines.findLastIndex((line) => /^\s*❯(?:\s|$)/.test(line) && !/^\s*❯\s*\d+[.)]/.test(line))
+  const bordered = prompt > 0 && /^\s*[─━-]{3}/.test(lines[prompt - 1]) && /^\s*[─━-]{3}/.test(lines[prompt + 1] ?? '')
+  return { kind: busy ? 'working' : bordered ? 'idle' : 'unknown', trust, trustFocus }
+}
+
 function holdTmux(host, options, hear, left) {
-  const { claudeCommand, offPlan: OFF_PLAN, planOnly, claudeState, readClaude, claudeFile, sourceArgs, askId, questionsFromClaude, wantedFromClaude } = host;
+  const { claudeCommand, offPlan: OFF_PLAN, planOnly, claudeState, readClaude, claudeFile } = host;
+  const environment = () => Object.fromEntries(Object.entries(planOnly()).filter(([key]) => !key.startsWith("GECKIT_")));
   const tmux = (args, input) => new Promise((resolve, reject) => {
-    const child = execFile("tmux", [...args], { env: planOnly(), windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile("tmux", [...args], { env: environment(), windowsHide: true }, (error, stdout, stderr) => {
       if (error !== null) reject(new Error(stderr.trim() || error.message));
       else resolve(stdout.trim());
     });
     if (input !== void 0) child.stdin?.end(input);
   });
   if (process.platform === "win32" || options.root.startsWith("ssh://")) throw new Error("tmux mode is available for local macOS and Linux projects.");
-  const name = `geckit-${options.id.slice(0, 8)}-${randomUUID().slice(0, 8)}`;
-  const token = randomUUID();
+  const name = `claude-${options.id.slice(0, 8)}-${randomUUID().slice(0, 8)}`;
+  const alive = () => tmux(["display-message", "-p", "-t", name, "#{pane_dead}"]).then((dead) => dead !== "1", () => false);
   const state = claudeState(options.root);
-  const asks = /* @__PURE__ */ new Map();
   let offset = 0;
   let remainder = Buffer.alloc(0);
   let running = false;
   let ended = false;
   let turn = false;
-  let lastText = "";
-  let fallback;
-  let fallbackText;
-  const displayed = /* @__PURE__ */ new Map();
+  let stopping = false;
+  let activity = false;
+  let failure = "";
+  let idle = 0;
   let counter = 0;
+  let pending;
+  let answering = false;
   let reading = Promise.resolve();
   let poll;
   let polls = 0;
   let starting;
-  let checkingTrust = false;
   let trustHandled = false;
   let imagesDirectory;
-  const emit = (items = [], gone = [], signals = []) => {
-    if (!ended) hear({ items, gone, signals });
-  };
+  let submitting = false;
+  const emit = (items = [], gone = [], signals = []) => { if (!ended) hear({ items, gone, signals }); };
   const read = async () => {
     const path = await claudeFile(options.root, options.id);
     if (path === void 0) return;
@@ -89,7 +117,9 @@ function holdTmux(host, options, hear, left) {
       } catch {
         continue;
       }
-      if (entry["isSidechain"] === true || entry["isMeta"] === true) continue;
+      if (entry["isSidechain"] === true) continue;
+      if (entry["type"] === "system" && entry["subtype"] === "local_command" && entry["commandRun"] !== void 0) activity = true;
+      if (entry["isMeta"] === true) continue;
       const type = string(entry["type"]);
       if (type === "cost-state") {
         const cost = entry["totalCostUSD"];
@@ -98,47 +128,29 @@ function holdTmux(host, options, hear, left) {
       }
       if (type !== "assistant" && type !== "user" && type !== "system" && type !== "rate_limit_event") continue;
       const parsed = readClaude(state, type === "user" ? { ...entry, tool_use_result: entry["toolUseResult"] } : entry);
-      const said = parsed.signals.find((signal) => signal.kind === "said");
-      if (said?.kind === "said") lastText = said.text;
       const model = type === "assistant" ? string(object(entry["message"])["model"]) : "";
-      const shown = said?.kind === "said" ? [...displayed].find(([, parts]) => parts.join("") === said.text)?.[0] : void 0;
-      if (shown !== void 0) displayed.delete(shown);
-      const gone = [
-        ...parsed.gone,
-        ...shown === void 0 ? [] : [`tmux:message:${shown}`],
-        ...fallback !== void 0 && said?.kind === "said" && said.text === fallbackText ? [fallback] : []
-      ];
-      if (fallback !== void 0 && gone.includes(fallback)) {
-        fallback = void 0;
-        fallbackText = void 0;
+      if (type === "assistant" && parsed.items.length > 0) activity = true;
+      if (!turn && parsed.items.some((item) => item.kind === "theirs")) {
+        turn = true;
+        emit([], [], [{ kind: "begun" }]);
       }
-      emit(parsed.items, gone, [...parsed.signals.filter((signal) => signal.kind !== "ended" && signal.kind !== "asks"), ...model === "" || model === "<synthetic>" ? [] : [{ kind: "model", model }]]);
+      if (type === "assistant" && entry["isApiErrorMessage"] === true) {
+        failure = string(object(entry["message"])["content"]?.find?.((part) => part.type === "text")?.text) || "Claude Code API request failed.";
+        activity = true;
+      } else if (model !== "" && model !== "<synthetic>") failure = "";
+      emit(parsed.items, parsed.gone, [...parsed.signals.filter((signal) => signal.kind !== "ended" && signal.kind !== "asks"), ...model === "" || model === "<synthetic>" ? [] : [{ kind: "model", model }]]);
     }
   };
-  const catchUp = () => {
-    reading = reading.then(read, read).catch(() => void 0);
-    return reading;
-  };
-  const checkTrust = async () => {
-    if (!running || ended || trustHandled || checkingTrust) return;
-    checkingTrust = true;
-    try {
-      const screen = await tmux(["capture-pane", "-p", "-t", name]);
-      if (/Quick safety check:\s*Is this a project you created or one you trust\?/i.test(screen) && /Enter to confirm/i.test(screen)) {
-        trustHandled = true;
-        await tmux(["send-keys", "-t", name, "Enter"]);
-      }
-    } catch (error) {
-      if (!ended) {
-        emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
-        void close();
-      }
-    }
-    finally { checkingTrust = false; }
+
+  const clearImages = async () => {
+    if (imagesDirectory === void 0) return;
+    const directory = imagesDirectory;
+    imagesDirectory = void 0;
+    await rm(directory, { recursive: true, force: true });
   };
   const imagesIn = async (images) => {
     if (images.length === 0) return [];
-    imagesDirectory ??= await mkdtemp(join(tmpdir(), "geckit-claude-images-"));
+    imagesDirectory ??= await mkdtemp(join(tmpdir(), "claude-images-"));
     const extensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp" };
     const paths = [];
     for (const image of images) {
@@ -148,152 +160,101 @@ function holdTmux(host, options, hear, left) {
     }
     return paths;
   };
-  const clearImages = async () => {
-    if (imagesDirectory === void 0) return;
-    const directory = imagesDirectory;
-    imagesDirectory = void 0;
-    await rm(directory, { recursive: true, force: true });
+  const resolveQuestion = () => {
+    if (pending === void 0) return;
+    emit([], [], [{ kind: "resolved", ask: pending.id }]);
+    pending = void 0;
   };
-  const reply = (response, body = {}) => {
-    if (response.writableEnded) return;
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(body));
+  const ask = (screen) => {
+    if (pending?.signature === screen.signature) return;
+    resolveQuestion();
+    pending = { ...screen, id: `terminal:${String(++counter)}` };
+    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: screen.title, choices: screen.options.map((option) => option.label) } }]);
   };
-  const decision = (pending, answer) => {
-    if (pending.event === "PermissionRequest") return {
-      hookSpecificOutput: {
-        hookEventName: "PermissionRequest",
-        decision: answer === "no" ? { behavior: "deny", message: "The user denied this action." } : { behavior: "allow", updatedInput: pending.input }
-      }
-    };
-    if (pending.tool === "AskUserQuestion") return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "allow",
-        updatedInput: { ...pending.input, answers: pending.answers }
-      }
-    };
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: answer === "no" ? "deny" : "allow",
-        updatedInput: pending.input
-      }
-    };
-  };
-  const deny = (pending) => pending.event === "PermissionRequest" ? { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "deny", message: "GeckIt stopped this turn." } } } : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "GeckIt stopped this turn." } };
-  const hook = async (body, response) => {
-    const event = string(body["hook_event_name"]);
-    if (string(body["session_id"]) !== options.id) {
-      response.writeHead(403);
-      response.end();
-      return;
-    }
-    if (event === "PermissionRequest" || event === "PreToolUse") {
-      await catchUp();
-      const id = `tmux:${String(++counter)}`;
-      const input = object(body["tool_input"]);
-      const tool = string(body["tool_name"]);
-      const questions = event === "PreToolUse" && tool === "AskUserQuestion" ? questionsFromClaude(input) : [];
-      const wanted = questions[0] ?? wantedFromClaude(tool, input);
-      asks.set(id, { response, input, event, tool, questions: questions.map((one) => one.kind === "question" ? one.question : ""), answers: {} });
-      emit([], [], [{ kind: "asks", ask: id, wanted }]);
-      return;
-    }
-    if (event === "UserPromptSubmit") {
-      turn = true;
-      lastText = "";
-      emit([], [], [{ kind: "begun" }]);
-    }
-    if (event === "MessageDisplay") {
-      const id = string(body["message_id"]);
-      const index = body["index"];
-      if (id !== "" && typeof index === "number" && index >= 0 && index < 1e5) {
-        const parts = displayed.get(id) ?? [];
-        parts[index] = string(body["delta"]);
-        displayed.set(id, parts);
-        const text = parts.join("");
-        if (text !== "") {
-          lastText = text;
-          emit([{ kind: "theirs", id: `tmux:message:${id}`, text }], [], [{ kind: "said", text }]);
-        }
-      }
-    }
-    if (event === "Stop" || event === "StopFailure") {
-      await catchUp();
-      if (event === "Stop") {
-        const final = string(body["last_assistant_message"]);
-        if (final !== "" && final !== lastText) {
-          fallback = `tmux:final:${String(++counter)}`;
-          fallbackText = final;
-          emit([{ kind: "theirs", id: fallback, text: final }], [], [{ kind: "said", text: final }]);
-        }
-      }
-      turn = false;
-      await clearImages();
-      emit([], [], [{ kind: "ended", how: event === "Stop" ? "done" : "failed", ...event === "StopFailure" && string(body["error"]) !== "" ? { text: string(body["error"]) } : {} }]);
-    }
-    reply(response);
-  };
-  const server = createServer((request, response) => {
-    if (request.method !== "POST" || request.headers.authorization !== `Bearer ${token}`) {
-      response.writeHead(403);
-      response.end();
-      return;
-    }
-    const chunks = [];
-    let size = 0;
-    request.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > 1e6) request.destroy();
-      else chunks.push(chunk);
-    });
-    request.on("end", () => {
-      try {
-        void hook(JSON.parse(Buffer.concat(chunks).toString("utf8")), response);
-      } catch {
-        response.writeHead(400);
-        response.end();
-      }
-    });
-  });
-  server.requestTimeout = 0;
-  server.timeout = 0;
-  const ready = new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const start = async (prompt) => {
-    await ready;
+  const inspect = async () => {
+    if (!running || ended || answering || submitting) return;
+    const text = await tmux(["capture-pane", "-p", "-t", name]);
     if (ended) return;
-    const address = server.address();
-    if (address === null || typeof address === "string") throw new Error("Hook server did not start.");
+    const screen = terminalScreen(text);
+    if (screen.trust && !trustHandled) {
+      if (screen.trustFocus === -1) return;
+      trustHandled = true;
+      await tmux(["send-keys", "-t", name, ...screen.trustFocus === 0 ? ["Down"] : [], "Enter"]);
+      return;
+    }
+    if (screen.kind === "question") {
+      idle = 0;
+      activity = true;
+      ask(screen);
+    } else {
+      resolveQuestion();
+      if (screen.kind === "working") {
+        activity = true;
+        if (!turn) { turn = true; emit([], [], [{ kind: "begun" }]); }
+      }
+      if (turn && screen.kind === "idle" && (activity || stopping) && remainder.length === 0) idle += 1;
+      else idle = 0;
+      if (idle >= 2) {
+        await read();
+        if (remainder.length !== 0) { idle = 0; return; }
+        if (!await alive()) throw new Error("Claude Code exited.");
+        turn = false;
+        await clearImages();
+        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : failure === "" ? "done" : "failed", ...failure === "" ? {} : { text: failure } }]);
+        stopping = false;
+        activity = false;
+        idle = 0;
+      }
+    }
+  };
+  const catchUp = () => {
+    reading = reading.then(async () => {
+      if (++polls % 4 === 0 && !await alive()) throw new Error("Claude Code exited.");
+      await read();
+      await inspect();
+    }).catch(async () => {
+      if (!running || ended) return;
+      if (await alive()) return;
+      if (turn) emit([], [], [{ kind: "ended", how: "failed", text: "Claude Code exited." }]);
+      void close();
+    });
+    return reading;
+  };
+  const start = async () => {
+    if (ended) return;
     const path = await claudeFile(options.root, options.id);
     if (path !== void 0) offset = (await stat(path)).size;
-    const handler = { type: "http", url: `http://127.0.0.1:${String(address.port)}/`, timeout: 3600, headers: { Authorization: `Bearer ${token}` } };
-    const hooks = Object.fromEntries(["Stop", "StopFailure", "PermissionRequest", "UserPromptSubmit", "MessageDisplay"].map((event) => [event, [{ hooks: [handler] }]]));
-    const settings = JSON.stringify({ hooks: { ...hooks, PreToolUse: [{ matcher: "AskUserQuestion|ExitPlanMode", hooks: [handler] }] } });
-    const env = planOnly();
-    const launch = ["exec", "env", ...OFF_PLAN.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand(env), ...terminalArgs(options, settings, sourceArgs), prompt].map(quote).join(" ");
-    await tmux(["new-session", "-d", "-s", name, "-c", options.root, launch]);
+    const env = environment();
+    const omitted = [...OFF_PLAN, ...Object.keys(planOnly()).filter((key) => key.startsWith("GECKIT_"))];
+    const config = env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+    const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand(env), ...terminalArgs(options, config)].map(quote).join(" ");
+    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch]);
+    if (ended) { await tmux(["kill-session", "-t", name]).catch(() => void 0); return; }
     running = true;
-    poll = setInterval(() => {
-      void catchUp();
-      void checkTrust();
-      if (++polls % 4 !== 0) return;
-      void tmux(["has-session", "-t", name]).catch(() => {
-        if (!running || ended) return;
-        running = false;
-        if (turn) emit([], [], [{ kind: "ended", how: "failed", text: "Claude Code exited." }]);
-        void close();
-      });
-    }, 500);
+    poll = setInterval(() => { void catchUp(); }, 500);
+  };
+  const waitForPrompt = async () => {
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      if (ended) throw new Error("Claude Code session ended before input was ready.");
+      const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
+      if (screen.trust && !trustHandled && screen.trustFocus !== -1) {
+        trustHandled = true;
+        await tmux(["send-keys", "-t", name, ...(screen.trustFocus === 0 ? ["Down"] : []), "Enter"]);
+      } else if (screen.kind === "idle") return;
+      await delay(100);
+    }
+    throw new Error("Claude Code did not become ready for input.");
   };
   const keys = async (text) => {
-    await ready;
-    const buffer = `geckit-${randomUUID()}`;
-    await tmux(["load-buffer", "-b", buffer, "-"], text);
-    await tmux(["paste-buffer", "-p", "-d", "-b", buffer, "-t", name]);
+    for (const character of text) {
+      if (character === "\n") {
+        await tmux(["send-keys", "-l", "-t", name, "\\"]);
+        await tmux(["send-keys", "-t", name, "Enter"]);
+      } else {
+        await tmux(["send-keys", "-l", "-t", name, character]);
+      }
+      await delay(typingDelay());
+    }
     await tmux(["send-keys", "-t", name, "Enter"]);
   };
   const close = async () => {
@@ -302,51 +263,70 @@ function holdTmux(host, options, hear, left) {
     running = false;
     clearInterval(poll);
     await starting?.catch(() => void 0);
-    await clearImages();
-    for (const pending of asks.values()) reply(pending.response, deny(pending));
-    asks.clear();
-    server.close();
     await tmux(["kill-session", "-t", name]).catch(() => void 0);
+    await reading;
+    await clearImages();
     left();
   };
   return {
     send(text, images = [], before = []) {
       if (ended) return;
+      submitting = true;
       turn = true;
-      lastText = "";
-      const sending = imagesIn(images).then((paths) => {
+      emit([], [], [{ kind: "begun" }]);
+      stopping = false;
+      activity = false;
+      failure = "";
+      idle = 0;
+      const sending = imagesIn(images).then(async (paths) => {
         const prompt = [...before, text, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
-        return running ? keys(prompt) : starting === void 0 ? starting = start(prompt) : starting.then(() => keys(prompt));
+        if (!running && starting === void 0) starting = start();
+        await starting;
+        await waitForPrompt();
+        emit([], [], [{ kind: "doing", what: "sending to Claude Code" }]);
+        await keys(prompt);
+        emit([], [], [{ kind: "doing", what: "waiting for Claude Code" }]);
       });
-      void sending.catch((error) => {
+      void sending.finally(() => { submitting = false; }).catch((error) => {
         emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
         void close();
       });
     },
-    answer(ask, answer) {
-      const [id = ask, position = "0"] = ask.split("#");
-      const pending = asks.get(id);
-      if (pending === void 0) return;
-      if (pending.questions.length > 0) {
-        const index = Number(position);
-        pending.answers[pending.questions[index] ?? ""] = answer;
-        const next = questionsFromClaude(pending.input)[index + 1];
-        if (next !== void 0) {
-          emit([], [], [{ kind: "asks", ask: askId(id, index + 1), wanted: next }]);
+    answer(id, answer) {
+      if (pending?.id !== id || answering || ended) return;
+      answering = true;
+      const current = pending;
+      void (async () => {
+        const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
+        if (screen.kind !== "question" || screen.signature !== current.signature) {
+          resolveQuestion();
+          if (screen.kind === "question") ask(screen);
           return;
         }
-      }
-      asks.delete(id);
-      reply(pending.response, decision(pending, answer));
+        let index = screen.options.findIndex((option) => option.label === answer);
+        let typed;
+        if (index === -1) {
+          index = screen.options.findIndex((option) => /^(?:Type something|Other\b)/i.test(option.label));
+          typed = answer;
+        }
+        if (index === -1) {
+          pending = void 0;
+          ask(screen);
+          return;
+        }
+        const distance = index - screen.focus;
+        if (distance !== 0) await tmux(["send-keys", "-t", name, ...Array.from({ length: Math.abs(distance) }, () => distance < 0 ? "Up" : "Down")]);
+        await tmux(["send-keys", "-t", name, "Enter"]);
+        if (typed !== void 0) await keys(string(typed));
+        pending = void 0;
+        idle = 0;
+      })().catch((error) => { emit([], [], [{ kind: "ended", how: "failed", text: error.message }]); void close(); }).finally(() => { answering = false; });
     },
     stop() {
-      for (const pending of asks.values()) reply(pending.response, deny(pending));
-      asks.clear();
-      void tmux(["send-keys", "-t", name, "C-c"]).then(() => setTimeout(() => {
-        if (!turn || ended) return;
-        turn = false;
-        emit([], [], [{ kind: "ended", how: "stopped" }]);
-      }, 1e3)).catch(() => void 0);
+      if (ended) return;
+      stopping = true;
+      resolveQuestion();
+      void tmux(["send-keys", "-t", name, "C-c"]).catch(() => void 0);
     },
     end: close
   };
@@ -354,25 +334,12 @@ function holdTmux(host, options, hear, left) {
 function create(host) {
   return {
     ...host.claude,
-    id: "claude-tmux",
-    family: "claude",
-    transport: "tmux",
-    name: "Claude Code (tmux)",
-    shortName: "Claude",
-    icon: "claude",
-    browser: "claude",
-    loginCommand: "claude auth login",
-    planName: "Claude",
-    localOnly: true,
-    subscriptionOnly: true,
-    images: true,
-    remoteControl: false,
-    idleMs: 12e4,
-    waitForExit: true,
+    id: "claude-tmux", family: "claude", transport: "tmux",
+    name: "Claude Code (tmux)", shortName: "Claude", icon: "claude", browser: "claude",
+    loginCommand: "claude auth login", planName: "Claude", localOnly: true,
+    subscriptionOnly: true, images: true, remoteControl: false, idleMs: 3600000, waitForExit: true,
+    instructions: "own", setInstructions: async () => {},
     hold: (options, hear, left) => holdTmux(host, options, hear, left)
   };
 }
-export {
-  create,
-  holdTmux
-};
+export { create, holdTmux, terminalScreen };
