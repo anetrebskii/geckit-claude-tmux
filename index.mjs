@@ -171,15 +171,24 @@ function holdTmux(host, options, hear, left) {
     pending = { ...screen, id: `terminal:${String(++counter)}` };
     emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: screen.title, choices: screen.options.map((option) => option.label) } }]);
   };
+  const confirmTrust = async (screen) => {
+    if (!screen.trust || trustHandled || screen.trustFocus === -1) return;
+    if (screen.trustFocus === 0) {
+      await tmux(["send-keys", "-t", name, "Down"]);
+      await delay(700);
+      screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
+    }
+    if (!screen.trust || screen.trustFocus !== 1) return;
+    await tmux(["send-keys", "-t", name, "Enter"]);
+    trustHandled = true;
+  };
   const inspect = async () => {
     if (!running || ended || answering || submitting) return;
     const text = await tmux(["capture-pane", "-p", "-t", name]);
     if (ended) return;
     const screen = terminalScreen(text);
     if (screen.trust && !trustHandled) {
-      if (screen.trustFocus === -1) return;
-      trustHandled = true;
-      await tmux(["send-keys", "-t", name, ...screen.trustFocus === 0 ? ["Down"] : [], "Enter"]);
+      await confirmTrust(screen);
       return;
     }
     if (screen.kind === "question") {
@@ -237,10 +246,8 @@ function holdTmux(host, options, hear, left) {
     for (let attempt = 0; attempt < 600; attempt += 1) {
       if (ended) throw new Error("Claude Code session ended before input was ready.");
       const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
-      if (screen.trust && !trustHandled && screen.trustFocus !== -1) {
-        trustHandled = true;
-        await tmux(["send-keys", "-t", name, ...(screen.trustFocus === 0 ? ["Down"] : []), "Enter"]);
-      } else if (screen.kind === "idle") return;
+      if (screen.trust && !trustHandled) await confirmTrust(screen);
+      else if (screen.kind === "idle") return;
       await delay(100);
     }
     throw new Error("Claude Code did not become ready for input.");

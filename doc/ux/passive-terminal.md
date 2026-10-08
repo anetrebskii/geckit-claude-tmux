@@ -83,7 +83,7 @@ Question title and choices are Claude's native terminal text. Existing app label
 - Long-running tool or hook: retain Working while native busy indicators remain.
 - Fast answer: new transcript data provides turn activity even if no busy screen was sampled.
 - Stale question: recapture before answering; never select an option from an obsolete screen.
-- Native workspace trust: recognize the exact trust prompt and select Yes explicitly; never press Enter on No, exit.
+- Native workspace trust: recognize the exact trust prompt, move to Yes, wait 700 ms for native input to settle, and recapture the screen to confirm Yes is visibly selected before pressing Enter. If startup ignores the navigation key, retry without submitting No, exit.
 - Images: preserve temporary image paths and remove files after completion/stop.
 - Existing GECKIT.md: exclude only that file per session if verified supported; do not edit shared global instructions.
 - Existing conversation: prior messages/system context may already mention GeckIt.
@@ -107,7 +107,7 @@ Use tmux input, native terminal selection and passive JSONL reading. Remove HTTP
 
 ## 12. Verification
 
-- Node syntax checks and all three focused tests pass. Integration covers multiline first/follow-up input, no hooks or source prompt, environment filtering, resume offset, working silence, idle-before-activity, unknown layout, native denial and stale choices, custom answers, partial UTF-8 JSONL, local slash commands, image cleanup, explicit trust selection, Stop and process exit.
+- Node syntax checks and all three focused tests pass. Integration covers multiline first/follow-up input, no hooks or source prompt, environment filtering, resume offset, working silence, idle-before-activity, unknown layout, native denial and stale choices, custom answers, partial UTF-8 JSONL, local slash commands, image cleanup, explicit trust selection after an ignored startup key, Stop and process exit.
 - Native Claude Code 2.1.294 passed an end-to-end driver test: trust confirmation, PONG from JSONL, idle completion, follow-up Red/Blue question, selecting Blue and completion. Its idle prompt, working spinner without interrupt hints and numbered question match the parser. Native `/memory` comparison shows GECKIT.md in the baseline session and absent with per-process exclusion; other user/project instructions remain.
 - GeckIt Local computer access was denied by Computer Use. Full-window light/dark, keyboard/focus, scrolling and viewport review of its existing question cards is unavailable. No frontend components or styles changed.
 - Unknown layouts stay working rather than reporting completion; native dialogs outside numbered menus require terminal interaction.

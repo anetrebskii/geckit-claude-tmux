@@ -83,6 +83,8 @@ test('sends through tmux, tails JSONL, and confirms native lifecycle and approva
     await until(() => ended().length === 1)
     assert(texts().includes('answer: ' + first), JSON.stringify(texts()))
     assert.equal(texts().includes('old reply'), false)
+    assert((await logs()).some((one) => one.ignoredTrustNavigation))
+    assert((await logs()).some((one) => one.trusted))
     const launch = (await logs())[0]
     assert(launch.args.includes('--resume'))
     const settings = JSON.parse(launch.args[launch.args.indexOf('--settings') + 1])

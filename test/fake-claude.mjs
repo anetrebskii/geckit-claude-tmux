@@ -20,6 +20,8 @@ let pasting = false
 let typed = false
 let trusting = Boolean(process.env.CLAUDE_TEST_TRUST)
 let trustFocus = 0
+let trustMissed = false
+const trustScreen = () => paint(`Quick safety check:\nIs this a project you created or one you trust?\n${trustFocus === 0 ? "❯" : " "} No, exit\n${trustFocus === 1 ? "❯" : " "} Yes, I trust this folder\nEnter to confirm`)
 const paint = (text) => process.stdout.write('\x1b[2J\x1b[H' + text)
 const idle = () => paint('Claude Code\n────────────────────\n❯\u00a0Try "ask anything"\n────────────────────\n  auto mode on\n')
 const working = () => paint('Claude Code\n✶ Working…\n────────────────────\n❯\u00a0\n────────────────────\n')
@@ -68,7 +70,10 @@ process.stdin.on('data', (chunk) => {
     if (chunk.slice(i).startsWith('\x1b[200~')) { pasting = true; i += 5; continue }
     if (chunk.slice(i).startsWith('\x1b[201~')) { pasting = false; i += 5; continue }
     if (chunk.slice(i).startsWith('\x1b[A') || chunk.slice(i).startsWith('\x1b[B')) {
-      if (trusting) trustFocus = chunk[i + 2] === 'B' ? 1 : 0
+      if (trusting) {
+        if (!trustMissed) { trustMissed = true; record({ ignoredTrustNavigation: true }) }
+        else { trustFocus = chunk[i + 2] === 'B' ? 1 : 0; trustScreen() }
+      }
       if (menu) { selection = Math.max(0, Math.min(menu.options.length - 1, selection + (chunk[i + 2] === 'A' ? -1 : 1))); choices() }
       i += 2; continue
     }
@@ -97,5 +102,5 @@ setInterval(() => {
   if (command === 'change' && menu) { menu = { title: 'New question', options: ['Stay', 'Leave'] }; selection = 0; choices() }
 }, 40)
 if (process.env.CLAUDE_TEST_TRUST) {
-  paint('Quick safety check:\nIs this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm')
+  trustScreen()
 } else idle()
