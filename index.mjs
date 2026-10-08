@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { open, stat } from "node:fs/promises";
+import { mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 const object = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 const string = (value) => typeof value === "string" ? value : "";
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -48,6 +50,9 @@ function holdTmux(host, options, hear, left) {
   let poll;
   let polls = 0;
   let starting;
+  let checkingTrust = false;
+  let trustHandled = false;
+  let imagesDirectory;
   const emit = (items = [], gone = [], signals = []) => {
     if (!ended) hear({ items, gone, signals });
   };
@@ -113,6 +118,41 @@ function holdTmux(host, options, hear, left) {
   const catchUp = () => {
     reading = reading.then(read, read).catch(() => void 0);
     return reading;
+  };
+  const checkTrust = async () => {
+    if (!running || ended || trustHandled || checkingTrust) return;
+    checkingTrust = true;
+    try {
+      const screen = await tmux(["capture-pane", "-p", "-t", name]);
+      if (/Quick safety check:\s*Is this a project you created or one you trust\?/i.test(screen) && /Enter to confirm/i.test(screen)) {
+        trustHandled = true;
+        await tmux(["send-keys", "-t", name, "Enter"]);
+      }
+    } catch (error) {
+      if (!ended) {
+        emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
+        void close();
+      }
+    }
+    finally { checkingTrust = false; }
+  };
+  const imagesIn = async (images) => {
+    if (images.length === 0) return [];
+    imagesDirectory ??= await mkdtemp(join(tmpdir(), "geckit-claude-images-"));
+    const extensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp" };
+    const paths = [];
+    for (const image of images) {
+      const path = join(imagesDirectory, `${randomUUID()}${extensions[image.media] ?? ".img"}`);
+      await writeFile(path, Buffer.from(image.data, "base64"), { mode: 0o600, flag: "wx" });
+      paths.push(path);
+    }
+    return paths;
+  };
+  const clearImages = async () => {
+    if (imagesDirectory === void 0) return;
+    const directory = imagesDirectory;
+    imagesDirectory = void 0;
+    await rm(directory, { recursive: true, force: true });
   };
   const reply = (response, body = {}) => {
     if (response.writableEnded) return;
@@ -190,6 +230,7 @@ function holdTmux(host, options, hear, left) {
         }
       }
       turn = false;
+      await clearImages();
       emit([], [], [{ kind: "ended", how: event === "Stop" ? "done" : "failed", ...event === "StopFailure" && string(body["error"]) !== "" ? { text: string(body["error"]) } : {} }]);
     }
     reply(response);
@@ -238,6 +279,7 @@ function holdTmux(host, options, hear, left) {
     running = true;
     poll = setInterval(() => {
       void catchUp();
+      void checkTrust();
       if (++polls % 4 !== 0) return;
       void tmux(["has-session", "-t", name]).catch(() => {
         if (!running || ended) return;
@@ -260,6 +302,7 @@ function holdTmux(host, options, hear, left) {
     running = false;
     clearInterval(poll);
     await starting?.catch(() => void 0);
+    await clearImages();
     for (const pending of asks.values()) reply(pending.response, deny(pending));
     asks.clear();
     server.close();
@@ -269,14 +312,12 @@ function holdTmux(host, options, hear, left) {
   return {
     send(text, images = [], before = []) {
       if (ended) return;
-      if (images.length > 0) {
-        emit([], [], [{ kind: "ended", how: "failed", text: "tmux mode supports text only." }]);
-        return;
-      }
       turn = true;
       lastText = "";
-      const prompt = [...before, text].join("\n\n");
-      const sending = running ? keys(prompt) : starting === void 0 ? starting = start(prompt) : starting.then(() => keys(prompt));
+      const sending = imagesIn(images).then((paths) => {
+        const prompt = [...before, text, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
+        return running ? keys(prompt) : starting === void 0 ? starting = start(prompt) : starting.then(() => keys(prompt));
+      });
       void sending.catch((error) => {
         emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
         void close();
@@ -324,7 +365,7 @@ function create(host) {
     planName: "Claude",
     localOnly: true,
     subscriptionOnly: true,
-    images: false,
+    images: true,
     remoteControl: false,
     idleMs: 12e4,
     waitForExit: true,
