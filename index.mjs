@@ -21,10 +21,10 @@ const plain = (text) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replaceAll(
 function terminalScreen(text) {
   const lines = plain(text).split('\n').map((line) => line.trimEnd())
   const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join('\n')) && /Enter to confirm/i.test(text)
-  const trustFocus = lines.some((line) => /^\s*❯\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*❯\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1
-  const selected = lines.findLastIndex((line) => /^\s*❯\s*\d+[.)]\s+/.test(line))
+  const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1
+  const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*\d+[.)]\s+/.test(line))
   if (selected !== -1 && /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join('\n'))) {
-    const choice = /^\s*(?:❯\s*)?(\d+)[.)]\s+(.+)$/
+    const choice = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+)$/
     const groups = []
     for (const [at, line] of lines.entries()) {
       const match = choice.exec(line)
@@ -45,7 +45,7 @@ function terminalScreen(text) {
     return { kind: 'question', title, options, focus, signature, trust, trustFocus }
   }
   const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line))
-  const prompt = lines.findLastIndex((line) => /^\s*❯(?:\s|$)/.test(line) && !/^\s*❯\s*\d+[.)]/.test(line))
+  const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*\d+[.)]/.test(line))
   const bordered = prompt > 0 && /^\s*[─━-]{3}/.test(lines[prompt - 1]) && /^\s*[─━-]{3}/.test(lines[prompt + 1] ?? '')
   return { kind: busy ? 'working' : bordered ? 'idle' : 'unknown', trust, trustFocus }
 }
