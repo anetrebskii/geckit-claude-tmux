@@ -18,8 +18,12 @@ Working indicators keep the turn open. A recognized idle input prompt must appea
 
 Native numbered approvals and questions appear as existing GeckIt question cards with Claude's exact choices. Answering navigates the current menu and presses Enter; it rechecks the menu to reject stale answers. Unsupported dialogs must be handled in Claude's terminal. Stop sends Ctrl+C and waits for the idle prompt. The process remains open for follow-ups and shuts down after one hour idle following a finished turn. A new message resets the timer; working turns, pending approvals and tracked background tasks prevent shutdown.
 
+## Own code
+
+The plugin uses nothing of GeckIt's builtin Claude provider. Account, models, plan limits, history, search, MCP and browser lists come from `src/claude-runtime.mjs`, a copy of GeckIt's Claude code (see `UPSTREAM.md`). Plan limits are read the way GeckIt reads them: a separate `claude -p` with no message is asked `get_usage` over stdio. `src/provider.mjs` is the adapter; `index.mjs` is the built entry GeckIt installs, rebuilt with `npm ci && npm run build` and committed.
+
 ## Verification
 
-Run `node --test test/tmux.test.mjs`. The tests use a fake Claude program inside real tmux; no model account is needed. On a machine with active tmux sessions, set `TMUX_TMPDIR` to a private directory to isolate the test server.
+Run `npm test` (`node --test test/tmux.test.mjs`). The tests use a fake Claude program inside real tmux; no model account is needed. On a machine with active tmux sessions, set `TMUX_TMPDIR` to a private directory to isolate the test server.
 
 Behavior and verification details: [passive terminal UX](doc/ux/passive-terminal.md).

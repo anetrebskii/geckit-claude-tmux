@@ -1,0 +1,9 @@
+{
+  "name": "geckit-claude-tmux",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "FSL-1.1-MIT",
+  "scripts": { "build": "node build.mjs", "test": "node --test test/*.test.mjs" },
+  "devDependencies": { "esbuild": "0.25.12" }
+}

@@ -38,11 +38,10 @@ test('recognizes native states without interpreting reply text as a selection', 
   assert.deepEqual(native.options.map((one) => one.label), ['Red', 'Blue', 'Type something.', 'Chat about this'])
   assert.equal(terminalScreen('Quick safety check:\nIs this a project you created or one you trust?\nEnter to confirm').trust, true)
 })
-test('does not install host instructions', async () => {
-  let wrote = false
-  const provider = create({ claude: { setInstructions: () => { wrote = true } } })
-  await provider.setInstructions('guide')
-  assert.equal(wrote, false)
+test('implements the provider without a host', async () => {
+  const provider = create()
+  for (const method of ['account', 'program', 'models', 'limits', 'list', 'search', 'hidden', 'create', 'fork', 'has', 'read', 'links', 'goal', 'setGoal', 'clearGoal', 'hold', 'rename', 'remote', 'mcp', 'browsers', 'correct', 'setInstructions', 'delete', 'dispose']) assert.equal(typeof provider[method], 'function', method)
+  await provider.setInstructions(true, {})
   assert.equal(provider.instructions, 'own')
 })
 
@@ -56,7 +55,7 @@ test('injects text and images into active work without interruption', { skip: !a
   const exists = (path) => stat(path).then(() => true, () => false)
   const events = []
   const host = {
-    claudeCommand: () => binary, offPlan: [],
+    claudeCommand: () => binary, OFF_PLAN: [],
     planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder }),
     claudeState: () => ({}),
     readClaude: () => ({ items: [], gone: [], signals: [] }),
@@ -113,7 +112,7 @@ test('sends through tmux, tails JSONL, and confirms native lifecycle and approva
   const exists = (path) => stat(path).then(() => true, () => false)
   const host = {
     claudeCommand: () => binary,
-    offPlan: [],
+    OFF_PLAN: [],
     planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder, CLAUDE_TEST_TRUST: '1', GECKIT_SOURCE_CLI: 'secret-marker' }),
     claudeState: () => ({}),
     readClaude: (_state, entry) => {

@@ -1,66 +1,13 @@
-var __defProp = Object.defineProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
+// Copied from GeckIt. Editable plugin-owned implementation; no host.claude calls.
+import { createRequire as geckitCreateRequire } from 'node:module';
+const require = geckitCreateRequire(import.meta.url);
 
-// src/provider.mjs
-import { execFile as execFile2 } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtemp, open as open3, rm as rm2, stat as stat3, writeFile } from "node:fs/promises";
-import { homedir as homedir6, tmpdir } from "node:os";
-import { join as join4 } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-
-// src/claude-runtime.mjs
-var claude_runtime_exports = {};
-__export(claude_runtime_exports, {
-  OFF_PLAN: () => OFF_PLAN,
-  claudeAccount: () => claudeAccount,
-  claudeCommand: () => claudeCommand,
-  claudeFile: () => claudeFile,
-  claudeModels: () => claudeModels,
-  claudeProgram: () => claudeProgram,
-  claudeState: () => claudeState,
-  deleteClaude: () => deleteClaude,
-  everyClaude: () => everyClaude,
-  forkPoint: () => forkPoint,
-  listClaude: () => listClaude,
-  planOnly: () => planOnly,
-  readBrowsers: () => readBrowsers,
-  readClaude: () => readClaude,
-  readClaudeSession: () => readClaudeSession,
-  readGoal: () => readGoal,
-  readLinks: () => readLinks,
-  readMcp: () => readMcp,
-  readUsage: () => readUsage,
-  searchClaude: () => searchClaude
-});
-import { createRequire as geckitCreateRequire } from "node:module";
+// src/main/sessions/account.ts
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
-import { isAbsolute as isAbsolute2, relative, resolve, sep } from "node:path";
-import { homedir as homedir2 } from "node:os";
-import { basename } from "node:path";
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import { open, readdir, realpath, rm, stat } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
-import { join as join2 } from "node:path";
-import { spawn as spawn2 } from "node:child_process";
-import { createInterface as createInterface2 } from "node:readline";
-import { spawn as spawn3 } from "node:child_process";
-import { homedir as homedir4 } from "node:os";
-import { createInterface as createInterface3 } from "node:readline";
-import { open as open2, readdir as readdir2, stat as stat2 } from "node:fs/promises";
-import { join as join3 } from "node:path";
-import { spawn as spawn4 } from "node:child_process";
-import { homedir as homedir5 } from "node:os";
-import { createInterface as createInterface4 } from "node:readline";
-var require2 = geckitCreateRequire(import.meta.url);
 var OFF_PLAN = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
@@ -148,8 +95,13 @@ async function claudeProgram() {
   const from = path === void 0 ? void 0 : installedBy(path);
   return { version, ...from === void 0 ? {} : { from }, ...path === void 0 ? {} : { path } };
 }
+
+// src/main/sessions/heard.ts
 var askId = (request, index) => index === 0 ? request : `${request}#${String(index)}`;
 var cardId = (ask) => `card:${ask}`;
+
+// src/main/sessions/rule.ts
+import { isAbsolute as isAbsolute2, relative, resolve, sep } from "node:path";
 function within(root, path) {
   if (path === "") return void 0;
   const inside = relative(root, resolve(root, path));
@@ -164,10 +116,18 @@ function filesAmong(root, paths) {
   }
   return found;
 }
+
+// src/main/sessions/wording.ts
+import { homedir as homedir2 } from "node:os";
+import { basename } from "node:path";
+
+// src/shared/providers.ts
 var modelVersion = (id) => {
   const match = /^(?:claude-[a-z]+-|gpt-)(\d+)(?:[-.](\d+))?(?:-|\[|$)/.exec(id);
   return match === null ? void 0 : [match[1], match[2]].filter((part) => part !== void 0).join(".");
 };
+
+// src/main/sessions/wording.ts
 var sentence = (doing) => doing.charAt(0).toUpperCase() + doing.slice(1);
 function shown(root, path) {
   const inside = within(root, path);
@@ -388,6 +348,8 @@ function answeredLine(wanted, answer, root) {
 var SUMMARISED = "Earlier messages were summarised by Claude Code.";
 var goalEnded = (condition, met) => met ? `Goal met: ${condition}` : `Goal given up, the check found it cannot be met: ${condition}`;
 var STOPPED = "Stopped.";
+
+// src/main/sessions/claude-read.ts
 var PICTURES = 24e6;
 function claudeState(root) {
   return {
@@ -961,7 +923,7 @@ function replayClaude(root, entries, quietFor) {
     for (const id of read2.gone) items.delete(id);
     for (const item of read2.items) items.set(item.id, item);
   };
-  let open32 = false;
+  let open3 = false;
   let shell;
   for (const entry of entries) {
     const type = string2(entry["type"]);
@@ -1021,7 +983,7 @@ function replayClaude(root, entries, quietFor) {
           note: "stopped",
           text: STOPPED
         });
-        open32 = false;
+        open3 = false;
         continue;
       }
       items.set(string2(entry["uuid"]), {
@@ -1031,13 +993,13 @@ function replayClaude(root, entries, quietFor) {
         ...pictures.length === 0 ? {} : { images: pictures },
         ...stamped(entry)
       });
-      open32 = true;
+      open3 = true;
       continue;
     }
     if (type === "assistant") {
       const inner = object(entry["message"]);
       const blocks = list(inner["content"]).map(object);
-      open32 = !(string2(inner["stop_reason"]) === "end_turn" || blocks.every((block) => string2(block["type"]) === "text"));
+      open3 = !(string2(inner["stop_reason"]) === "end_turn" || blocks.every((block) => string2(block["type"]) === "text"));
       take(readClaude(state, entry));
       continue;
     }
@@ -1056,7 +1018,7 @@ function replayClaude(root, entries, quietFor) {
   }
   flush(state, out);
   take(out);
-  if (open32 && quietFor > STILL_GOING) {
+  if (open3 && quietFor > STILL_GOING) {
     items.set("stopped:end", { kind: "note", id: "stopped:end", note: "stopped", text: STOPPED });
   }
   return [...items.values()];
@@ -1084,6 +1046,10 @@ function typed(entry) {
   if (list(content).some((block) => string2(object(block)["type"]) === "tool_result")) return "";
   return textsOf(content).filter((text2) => !/^\s*(<|\[Request interrupted|Caveat:)/.test(text2)).join("\n");
 }
+
+// src/main/sessions/chrome.ts
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 var PATIENCE = 2e4;
 var string3 = (value) => typeof value === "string" ? value : void 0;
 var browsersOf = (answer) => (Array.isArray(answer["browsers"]) ? answer["browsers"] : []).flatMap((one) => {
@@ -1145,6 +1111,13 @@ function readBrowsers(root, pick) {
     else ask("pick", { subtype: "select_chrome_browser", device_id: pick });
   });
 }
+
+// src/main/sessions/disk.ts
+import { open, readdir, realpath, rm, stat } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import { join as join2 } from "node:path";
+
+// src/shared/links.ts
 var NAMED = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
 var BARE = /https?:\/\/[^\s<>"'`)\]]+/g;
 var TRAILING = /[.,;:!?]+$/;
@@ -1174,6 +1147,8 @@ function workItem(text2) {
   }
   return { label: first, url, says: first };
 }
+
+// src/main/sessions/disk.ts
 var string4 = (value) => typeof value === "string" ? value : "";
 var slug = (root) => root.replace(/[^A-Za-z0-9]/g, "-");
 var base = () => join2(process.env["CLAUDE_CONFIG_DIR"] ?? join2(homedir3(), ".claude"), "projects");
@@ -1418,6 +1393,10 @@ async function forkPointAt(path, at) {
   const point = said[end]?.["uuid"];
   return typeof point === "string" ? point : void 0;
 }
+
+// src/main/sessions/mcp.ts
+import { spawn as spawn2 } from "node:child_process";
+import { createInterface as createInterface2 } from "node:readline";
 var PATIENCE2 = 2e4;
 var AGAIN2 = 500;
 var serversOf = (answer) => (Array.isArray(answer["mcpServers"]) ? answer["mcpServers"] : []).flatMap((one) => {
@@ -1478,6 +1457,11 @@ function readMcp(root, change, launch) {
     else ask("change", { subtype: "mcp_toggle", serverName: change.name, enabled: change.enabled });
   });
 }
+
+// src/main/sessions/models.ts
+import { spawn as spawn3 } from "node:child_process";
+import { homedir as homedir4 } from "node:os";
+import { createInterface as createInterface3 } from "node:readline";
 var string5 = (value) => typeof value === "string" ? value : "";
 var PATIENCE3 = 15e3;
 function claudeModelsFrom(answer) {
@@ -1551,6 +1535,10 @@ function claudeModels() {
     );
   });
 }
+
+// src/main/sessions/search.ts
+import { open as open2, readdir as readdir2, stat as stat2 } from "node:fs/promises";
+import { join as join3 } from "node:path";
 var CHUNK2 = 4 * 1024 * 1024;
 var MOST3 = 50;
 var AROUND = 60;
@@ -1662,6 +1650,11 @@ function searchClaude(roots, asked, foldersOf = folders) {
   queue = searched.catch(() => void 0);
   return searched;
 }
+
+// src/main/sessions/usage.ts
+import { spawn as spawn4 } from "node:child_process";
+import { homedir as homedir5 } from "node:os";
+import { createInterface as createInterface4 } from "node:readline";
 var PATIENCE4 = 2e4;
 function controlResponse(line) {
   let message;
@@ -1739,454 +1732,25 @@ function readUsage(models) {
     ask();
   });
 }
-
-// src/provider.mjs
-var typingDelay = () => 15 + Math.floor(Math.random() * 31);
-var object3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-var string7 = (value) => typeof value === "string" ? value : "";
-var quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-var terminalArgs = (options, config) => [
-  "--permission-mode",
-  options.mode,
-  "--settings",
-  JSON.stringify({ claudeMdExcludes: [join4(config, "GECKIT.md")] }),
-  ...options.model === void 0 ? [] : ["--model", options.model],
-  ...options.resume ? ["--resume", options.id] : ["--session-id", options.id],
-  ...options.resume || options.fork === void 0 ? [] : ["--fork-session", "--resume", options.fork.from, ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]]
-];
-var plain2 = (text2) => text2.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replaceAll("\xA0", " ");
-function terminalScreen(text2) {
-  const lines = plain2(text2).split("\n").map((line) => line.trimEnd());
-  const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join("\n")) && /Enter to confirm/i.test(text2);
-  const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1;
-  const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*\d+[.)]\s+/.test(line));
-  if (selected !== -1 && /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join("\n"))) {
-    const choice = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+)$/;
-    const groups = [];
-    for (const [at, line] of lines.entries()) {
-      const match = choice.exec(line);
-      if (match === null) continue;
-      const option = { at, number: Number(match[1]), label: match[2].trim() };
-      if (option.number !== (groups.at(-1)?.at(-1)?.number ?? 0) + 1) groups.push([]);
-      if (groups.length === 0) groups.push([]);
-      groups.at(-1).push(option);
-    }
-    const group = groups.find((options2) => options2.some((option) => option.at === selected)) ?? [];
-    const first = group[0]?.at ?? selected;
-    const border = lines.slice(0, first).findLastIndex((line) => /^\s*[─━-]{3}/.test(line));
-    const above = lines.slice(border + 1, first).filter((line) => line.trim() !== "");
-    const title = above.slice(-6).map((line) => line.trim()).join("\n") || "Choose an option";
-    const options = group.map(({ number, label }) => ({ number, label }));
-    const focus = group.findIndex((option) => option.at === selected);
-    const signature = JSON.stringify({ title, options });
-    return { kind: "question", title, options, focus, signature, trust, trustFocus };
-  }
-  const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line));
-  const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*\d+[.)]/.test(line));
-  const bordered = prompt > 0 && /^\s*[─━-]{3}/.test(lines[prompt - 1]) && /^\s*[─━-]{3}/.test(lines[prompt + 1] ?? "");
-  return { kind: busy ? "working" : bordered ? "idle" : "unknown", trust, trustFocus };
-}
-function holdTmux(runtime, options, hear, left) {
-  const { claudeCommand: claudeCommand2, OFF_PLAN: OFF_PLAN2, planOnly: planOnly2, claudeState: claudeState2, readClaude: readClaude2, claudeFile: claudeFile2 } = runtime;
-  const environment = () => Object.fromEntries(Object.entries(planOnly2()).filter(([key]) => !key.startsWith("GECKIT_")));
-  const tmux = (args, input) => new Promise((resolve2, reject) => {
-    const child = execFile2("tmux", [...args], { env: environment(), windowsHide: true }, (error, stdout, stderr) => {
-      if (error !== null) reject(new Error(stderr.trim() || error.message));
-      else resolve2(stdout.trim());
-    });
-    if (input !== void 0) child.stdin?.end(input);
-  });
-  if (process.platform === "win32" || options.root.startsWith("ssh://")) throw new Error("tmux mode is available for local macOS and Linux projects.");
-  const name = `claude-${options.id.slice(0, 8)}-${randomUUID().slice(0, 8)}`;
-  const alive = () => tmux(["display-message", "-p", "-t", name, "#{pane_dead}"]).then((dead) => dead !== "1", () => false);
-  const state = claudeState2(options.root);
-  let offset = 0;
-  let remainder = Buffer.alloc(0);
-  let running = false;
-  let ended = false;
-  let turn = false;
-  let stopping = false;
-  let activity = false;
-  let failure = "";
-  let idle = 0;
-  let counter = 0;
-  let pending;
-  let answering = false;
-  let reading = Promise.resolve();
-  let poll;
-  let polls = 0;
-  let starting;
-  let trustHandled = false;
-  let imagesDirectory;
-  let submitting = false;
-  const emit = (items = [], gone = [], signals = []) => {
-    if (!ended) hear({ items, gone, signals });
-  };
-  const read2 = async () => {
-    const path = await claudeFile2(options.root, options.id);
-    if (path === void 0) return;
-    const size = (await stat3(path)).size;
-    if (size < offset) {
-      offset = 0;
-      remainder = Buffer.alloc(0);
-    }
-    if (size === offset) return;
-    const file = await open3(path, "r");
-    let bytes;
-    try {
-      bytes = Buffer.alloc(size - offset);
-      const result = await file.read(bytes, 0, bytes.length, offset);
-      bytes = bytes.subarray(0, result.bytesRead);
-      offset += result.bytesRead;
-    } finally {
-      await file.close();
-    }
-    const joined = Buffer.concat([remainder, bytes]);
-    const end = joined.lastIndexOf(10);
-    if (end < 0) {
-      remainder = joined;
-      return;
-    }
-    remainder = joined.subarray(end + 1);
-    for (const line of joined.subarray(0, end).toString("utf8").split("\n")) {
-      let entry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (entry["isSidechain"] === true) continue;
-      if (entry["type"] === "system" && entry["subtype"] === "local_command" && entry["commandRun"] !== void 0) activity = true;
-      if (entry["isMeta"] === true) continue;
-      const type = string7(entry["type"]);
-      if (type === "cost-state") {
-        const cost = entry["totalCostUSD"];
-        if (typeof cost === "number") emit([], [], [{ kind: "spend", cost }]);
-        continue;
-      }
-      if (type !== "assistant" && type !== "user" && type !== "system" && type !== "rate_limit_event") continue;
-      const parsed = readClaude2(state, type === "user" ? { ...entry, tool_use_result: entry["toolUseResult"] } : entry);
-      const model = type === "assistant" ? string7(object3(entry["message"])["model"]) : "";
-      if (type === "assistant" && parsed.items.length > 0) activity = true;
-      if (!turn && parsed.items.some((item) => item.kind === "theirs")) {
-        turn = true;
-        emit([], [], [{ kind: "begun" }]);
-      }
-      if (type === "assistant" && entry["isApiErrorMessage"] === true) {
-        failure = string7(object3(entry["message"])["content"]?.find?.((part) => part.type === "text")?.text) || "Claude Code API request failed.";
-        activity = true;
-      } else if (model !== "" && model !== "<synthetic>") failure = "";
-      emit(parsed.items, parsed.gone, [...parsed.signals.filter((signal) => signal.kind !== "ended" && signal.kind !== "asks"), ...model === "" || model === "<synthetic>" ? [] : [{ kind: "model", model }]]);
-    }
-  };
-  const clearImages = async () => {
-    if (imagesDirectory === void 0) return;
-    const directory = imagesDirectory;
-    imagesDirectory = void 0;
-    await rm2(directory, { recursive: true, force: true });
-  };
-  const imagesIn = async (images) => {
-    if (images.length === 0) return [];
-    imagesDirectory ??= await mkdtemp(join4(tmpdir(), "claude-images-"));
-    const extensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp" };
-    const paths = [];
-    for (const image of images) {
-      const path = join4(imagesDirectory, `${randomUUID()}${extensions[image.media] ?? ".img"}`);
-      await writeFile(path, Buffer.from(image.data, "base64"), { mode: 384, flag: "wx" });
-      paths.push(path);
-    }
-    return paths;
-  };
-  const resolveQuestion = () => {
-    if (pending === void 0) return;
-    emit([], [], [{ kind: "resolved", ask: pending.id }]);
-    pending = void 0;
-  };
-  const ask = (screen) => {
-    if (pending?.signature === screen.signature) return;
-    resolveQuestion();
-    pending = { ...screen, id: `terminal:${String(++counter)}` };
-    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: screen.title, choices: screen.options.map((option) => option.label) } }]);
-  };
-  const confirmTrust = async (screen) => {
-    if (!screen.trust || trustHandled || screen.trustFocus === -1) return;
-    if (screen.trustFocus === 0) {
-      await tmux(["send-keys", "-t", name, "Down"]);
-      await delay(700);
-      screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
-    }
-    if (!screen.trust || screen.trustFocus !== 1) return;
-    await tmux(["send-keys", "-t", name, "Enter"]);
-    trustHandled = true;
-  };
-  const inspect = async () => {
-    if (!running || ended || answering || submitting) return;
-    const text2 = await tmux(["capture-pane", "-p", "-t", name]);
-    if (ended) return;
-    const screen = terminalScreen(text2);
-    if (screen.trust && !trustHandled) {
-      await confirmTrust(screen);
-      return;
-    }
-    if (screen.kind === "question") {
-      idle = 0;
-      activity = true;
-      ask(screen);
-    } else {
-      resolveQuestion();
-      if (screen.kind === "working") {
-        activity = true;
-        if (!turn) {
-          turn = true;
-          emit([], [], [{ kind: "begun" }]);
-        }
-      }
-      if (turn && screen.kind === "idle" && (activity || stopping) && remainder.length === 0) idle += 1;
-      else idle = 0;
-      if (idle >= 2) {
-        await read2();
-        if (remainder.length !== 0) {
-          idle = 0;
-          return;
-        }
-        if (!await alive()) throw new Error("Claude Code exited.");
-        turn = false;
-        await clearImages();
-        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : failure === "" ? "done" : "failed", ...failure === "" ? {} : { text: failure } }]);
-        stopping = false;
-        activity = false;
-        idle = 0;
-      }
-    }
-  };
-  const catchUp = () => {
-    reading = reading.then(async () => {
-      if (++polls % 4 === 0 && !await alive()) throw new Error("Claude Code exited.");
-      await read2();
-      await inspect();
-    }).catch(async () => {
-      if (!running || ended) return;
-      if (await alive()) return;
-      if (turn) emit([], [], [{ kind: "ended", how: "failed", text: "Claude Code exited." }]);
-      void close();
-    });
-    return reading;
-  };
-  const start = async () => {
-    if (ended) return;
-    const path = await claudeFile2(options.root, options.id);
-    if (path !== void 0) offset = (await stat3(path)).size;
-    const env = environment();
-    const omitted = [...OFF_PLAN2, ...Object.keys(planOnly2()).filter((key) => key.startsWith("GECKIT_"))];
-    const config = env.CLAUDE_CONFIG_DIR ?? join4(homedir6(), ".claude");
-    const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand2(env), ...terminalArgs(options, config)].map(quote).join(" ");
-    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch]);
-    if (ended) {
-      await tmux(["kill-session", "-t", name]).catch(() => void 0);
-      return;
-    }
-    running = true;
-    poll = setInterval(() => {
-      void catchUp();
-    }, 500);
-  };
-  const waitForPrompt = async () => {
-    for (let attempt = 0; attempt < 600; attempt += 1) {
-      if (ended) throw new Error("Claude Code session ended before input was ready.");
-      const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
-      if (screen.trust && !trustHandled) await confirmTrust(screen);
-      else if (screen.kind === "idle") return;
-      await delay(100);
-    }
-    throw new Error("Claude Code did not become ready for input.");
-  };
-  const keys = async (text2, ready) => {
-    for (const character of text2) {
-      await ready?.();
-      if (character === "\n") {
-        await tmux(["send-keys", "-l", "-t", name, "\\"]);
-        await tmux(["send-keys", "-t", name, "Enter"]);
-      } else {
-        await tmux(["send-keys", "-l", "-t", name, character]);
-      }
-      await delay(typingDelay());
-    }
-    await ready?.();
-    await tmux(["send-keys", "-t", name, "Enter"]);
-  };
-  const close = async () => {
-    if (ended) return;
-    ended = true;
-    running = false;
-    clearInterval(poll);
-    await starting?.catch(() => void 0);
-    await tmux(["kill-session", "-t", name]).catch(() => void 0);
-    await reading;
-    await clearImages();
-    left();
-  };
-  return {
-    async inject(text2, images = [], before = []) {
-      if (ended || !running || !turn || stopping) throw new Error("Claude Code is no longer working. Your message is still queued.");
-      if (submitting || answering || pending !== void 0) throw new Error("Answer Claude Code's question before sending this message.");
-      submitting = true;
-      let typed2 = false;
-      const ready = async () => {
-        if (ended || stopping || !turn || !await alive()) throw new Error("Claude Code is no longer working. Your message is still queued.");
-        const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
-        if (screen.kind !== "working") throw new Error(screen.kind === "question" ? "Answer Claude Code's question before sending this message." : "Claude Code is not ready to receive this message. Your message is still queued.");
-      };
-      try {
-        await ready();
-        const paths = await imagesIn(images);
-        await ready();
-        const prompt = [...before, text2, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
-        typed2 = true;
-        await keys(prompt, ready);
-        idle = 0;
-      } catch (error) {
-        if (typed2 && !ended) {
-          const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]).catch(() => ""));
-          if (screen.kind === "working" || screen.kind === "idle") await tmux(["send-keys", "-t", name, "C-u"]).catch(() => void 0);
-        }
-        throw error;
-      } finally {
-        submitting = false;
-      }
-    },
-    send(text2, images = [], before = []) {
-      if (ended) return;
-      submitting = true;
-      turn = true;
-      emit([], [], [{ kind: "begun" }]);
-      stopping = false;
-      activity = false;
-      failure = "";
-      idle = 0;
-      const sending = imagesIn(images).then(async (paths) => {
-        const prompt = [...before, text2, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
-        if (!running && starting === void 0) starting = start();
-        await starting;
-        await waitForPrompt();
-        emit([], [], [{ kind: "doing", what: "sending to Claude Code" }]);
-        await keys(prompt);
-        emit([], [], [{ kind: "doing", what: "waiting for Claude Code" }]);
-      });
-      void sending.finally(() => {
-        submitting = false;
-      }).catch((error) => {
-        emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
-        void close();
-      });
-    },
-    answer(id, answer) {
-      if (pending?.id !== id || answering || ended) return;
-      answering = true;
-      const current = pending;
-      void (async () => {
-        const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
-        if (screen.kind !== "question" || screen.signature !== current.signature) {
-          resolveQuestion();
-          if (screen.kind === "question") ask(screen);
-          return;
-        }
-        let index = screen.options.findIndex((option) => option.label === answer);
-        let typed2;
-        if (index === -1) {
-          index = screen.options.findIndex((option) => /^(?:Type something|Other\b)/i.test(option.label));
-          typed2 = answer;
-        }
-        if (index === -1) {
-          pending = void 0;
-          ask(screen);
-          return;
-        }
-        const distance = index - screen.focus;
-        if (distance !== 0) await tmux(["send-keys", "-t", name, ...Array.from({ length: Math.abs(distance) }, () => distance < 0 ? "Up" : "Down")]);
-        await tmux(["send-keys", "-t", name, "Enter"]);
-        if (typed2 !== void 0) await keys(string7(typed2));
-        pending = void 0;
-        idle = 0;
-      })().catch((error) => {
-        emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
-        void close();
-      }).finally(() => {
-        answering = false;
-      });
-    },
-    stop() {
-      if (ended) return;
-      stopping = true;
-      resolveQuestion();
-      void tmux(["send-keys", "-t", name, "C-c"]).catch(() => void 0);
-    },
-    end: close
-  };
-}
-function create() {
-  return {
-    id: "claude-tmux",
-    family: "claude",
-    transport: "tmux",
-    name: "Claude Code (tmux)",
-    shortName: "Claude",
-    icon: "claude",
-    browser: "claude",
-    loginCommand: "claude auth login",
-    planName: "Claude",
-    localOnly: true,
-    available: true,
-    subscriptionOnly: true,
-    images: true,
-    remoteControl: false,
-    nativeGoals: false,
-    idleMs: 36e5,
-    waitForExit: true,
-    instructions: "own",
-    setInstructions: async () => {
-    },
-    account: () => claudeAccount(),
-    program: () => claudeProgram(),
-    models: () => claudeModels(),
-    limits: (models) => readUsage(models),
-    list: async (roots) => {
-      const rows = [];
-      for (const root of roots) {
-        for (const { below, ...row } of await listClaude(root).catch(() => [])) rows.push(below === void 0 ? { ...row, root } : { ...row, root: below, project: root });
-      }
-      return rows;
-    },
-    search: (roots, asked) => searchClaude(roots, asked),
-    hidden: (from, to, include) => everyClaude(from, to, include),
-    create: async () => randomUUID(),
-    fork: async (root, id, at) => {
-      const point = await forkPoint(root, id, at).catch(() => void 0);
-      const items = (await readClaudeSession(root, id).catch(() => void 0))?.items ?? [];
-      const upTo = items.findLastIndex((item) => "at" in item && item.at !== void 0 && item.at <= at);
-      return { id: randomUUID(), fork: { from: id, ...point === void 0 ? {} : { at: point } }, begun: false, items: items.slice(0, upTo + 1) };
-    },
-    has: async (root, id) => await claudeFile(root, id) !== void 0,
-    read: (root, id) => readClaudeSession(root, id),
-    links: (root, id) => readLinks(root, id),
-    goal: (root, id) => readGoal(root, id),
-    setGoal: async () => void 0,
-    clearGoal: async () => void 0,
-    rename: async () => {
-    },
-    remote: async () => {
-      throw new Error("Claude Code (tmux) does not support remote control.");
-    },
-    mcp: (root, change) => readMcp(root, change),
-    browsers: async (root, pick) => root === void 0 ? void 0 : readBrowsers(root, pick),
-    correct: async () => ({ ok: false, error: "Claude Code correction is not available." }),
-    delete: (root, id) => deleteClaude(root, id),
-    dispose: () => {
-    },
-    hold: (options, hear, left) => holdTmux(claude_runtime_exports, options, hear, left)
-  };
-}
 export {
-  create,
-  holdTmux,
-  terminalScreen
+  OFF_PLAN,
+  claudeAccount,
+  claudeCommand,
+  claudeFile,
+  claudeModels,
+  claudeProgram,
+  claudeState,
+  deleteClaude,
+  everyClaude,
+  forkPoint,
+  listClaude,
+  planOnly,
+  readBrowsers,
+  readClaude,
+  readClaudeSession,
+  readGoal,
+  readLinks,
+  readMcp,
+  readUsage,
+  searchClaude
 };
