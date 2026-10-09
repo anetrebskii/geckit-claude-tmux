@@ -16,6 +16,8 @@ let selection = 0
 let menu
 let timer
 let input = ''
+let busy = false
+const queued = []
 let pasting = false
 let typed = false
 let trusting = Boolean(process.env.CLAUDE_TEST_TRUST)
@@ -23,8 +25,8 @@ let trustFocus = 0
 let trustMissed = false
 const trustScreen = () => paint(`Quick safety check:\nIs this a project you created or one you trust?\n${trustFocus === 0 ? "❯" : " "} No, exit\n${trustFocus === 1 ? "❯" : " "} Yes, I trust this folder\nEnter to confirm`)
 const paint = (text) => process.stdout.write('\x1b[2J\x1b[H' + text)
-const idle = () => paint('Claude Code\n────────────────────\n❯\u00a0Try "ask anything"\n────────────────────\n  auto mode on\n')
-const working = () => paint('Claude Code\n✶ Working…\n────────────────────\n❯\u00a0\n────────────────────\n')
+const idle = () => { busy = false; paint('Claude Code\n────────────────────\n❯\u00a0Try "ask anything"\n────────────────────\n  auto mode on\n') }
+const working = () => { busy = true; paint('Claude Code\n✶ Working…\n────────────────────\n❯\u00a0\n────────────────────\n') }
 const choices = () => paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n  Enter to select · Esc to cancel\n`)
 const reply = (text) => {
   write({ type: 'assistant', uuid: 'reply-' + ++count, message: { model: 'claude-test', stop_reason: 'end_turn', content: [{ type: 'text', text }] } })
@@ -78,7 +80,8 @@ process.stdin.on('data', (chunk) => {
       i += 2; continue
     }
     const c = chunk[i]
-    if (c === '\x03') { clearTimeout(timer); menu = undefined; record({ stopped: true }); idle(); continue }
+    if (c === '\x03') { clearTimeout(timer); queued.length = 0; menu = undefined; record({ stopped: true }); idle(); continue }
+    if (c === '\x15') { input = ''; record({ clearedInput: true }); continue }
     if ((c === '\r' || c === '\n') && !pasting) {
       if (input.endsWith('\\')) { input = input.slice(0, -1) + '\n'; continue }
       if (trusting) { if (trustFocus !== 1) process.exit(1); trusting = false; record({ trusted: true }); idle(); continue }
@@ -89,7 +92,7 @@ process.stdin.on('data', (chunk) => {
         if (choice === 'Type something.') { typed = true; paint('Type your answer\n'); continue }
         reply('choice: ' + choice)
       } else if (typed) { typed = false; reply('typed: ' + input); input = '' }
-      else { const prompt = input; input = ''; say(prompt) }
+      else { const prompt = input; input = ''; if (busy) { queued.push(prompt); record({ injected: prompt }) } else say(prompt) }
     } else input += pasting && c === '\r' ? '\n' : c
   }
 })
@@ -100,6 +103,7 @@ setInterval(() => {
   if (!command) return
   writeFileSync(control, '')
   if (command === 'change' && menu) { menu = { title: 'New question', options: ['Stay', 'Leave'] }; selection = 0; choices() }
+  if (command === 'release' && busy && queued.length > 0) { record({ consumed: queued.shift() }); reply('injection consumed') }
 }, 40)
 if (process.env.CLAUDE_TEST_TRUST) {
   trustScreen()

@@ -46,6 +46,63 @@ test('does not install host instructions', async () => {
   assert.equal(provider.instructions, 'own')
 })
 
+test('injects text and images into active work without interruption', { skip: !available, timeout: 30000 }, async () => {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-inject-test-')))
+  const id = randomUUID()
+  const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
+  await chmod(binary, 0o755)
+  const file = join(folder, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'), id + '.jsonl')
+  const log = join(folder, id + '.log')
+  const exists = (path) => stat(path).then(() => true, () => false)
+  const events = []
+  const host = {
+    claudeCommand: () => binary, offPlan: [],
+    planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder }),
+    claudeState: () => ({}),
+    readClaude: () => ({ items: [], gone: [], signals: [] }),
+    claudeFile: async () => await exists(file) ? file : undefined,
+  }
+  const driver = holdTmux(host, { id, root: folder, resume: false, mode: 'manual' }, (event) => events.push(event), () => {})
+  const signals = () => events.flatMap((event) => event.signals)
+  const logs = async () => (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+  try {
+    await assert.rejects(driver.inject('idle'), /no longer working/)
+    driver.send('hold')
+    await until(() => exists(log))
+    await until(async () => (await logs()).some((entry) => entry.prompt === 'hold'))
+    await delay(600)
+    const begun = signals().filter((entry) => entry.kind === 'begun').length
+    const text = "only this file\n'quoted' $(literal)"
+    const delivery = driver.inject(text, [{ media: 'image/png', data: Buffer.from('image bytes').toString('base64') }], ['command output'])
+    await assert.rejects(driver.inject('duplicate'), /question/)
+    await delivery
+    await until(async () => (await logs()).some((entry) => entry.injected))
+    const accepted = (await logs()).find((entry) => entry.injected).injected
+    assert(accepted.startsWith('command output\n\n' + text + '\n\nImage attachment: '), accepted)
+    const image = accepted.split('Image attachment: ')[1]
+    assert.equal(await readFile(image, 'utf8'), 'image bytes')
+    assert.equal(signals().filter((entry) => entry.kind === 'begun').length, begun)
+    assert.equal(signals().filter((entry) => entry.kind === 'ended').length, 0)
+    assert.equal((await logs()).some((entry) => entry.stopped), false)
+    await writeFile(join(folder, id + '.control'), 'release')
+    await until(() => signals().some((entry) => entry.kind === 'ended'))
+    assert.equal((await logs()).find((entry) => entry.consumed).consumed, accepted)
+    assert.equal(await exists(image), false)
+    await assert.rejects(driver.inject('finished'), /no longer working/)
+    driver.send('permission')
+    await until(() => signals().some((entry) => entry.kind === 'asks'))
+    const ask = signals().findLast((entry) => entry.kind === 'asks')
+    await assert.rejects(driver.inject('do not answer approval'), /question/)
+    assert.equal(signals().some((entry) => entry.kind === 'resolved' && entry.ask === ask.ask), false)
+    assert.equal((await logs()).some((entry) => entry.choice), false)
+    driver.answer(ask.ask, 'No')
+    await until(() => signals().filter((entry) => entry.kind === 'ended').length === 2)
+  } finally {
+    await driver.end()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
 test('sends through tmux, tails JSONL, and confirms native lifecycle and approvals', { skip: !available, timeout: 50000 }, async () => {
   const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-passive-test-')))
   const id = randomUUID()

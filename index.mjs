@@ -252,8 +252,9 @@ function holdTmux(host, options, hear, left) {
     }
     throw new Error("Claude Code did not become ready for input.");
   };
-  const keys = async (text) => {
+  const keys = async (text, ready) => {
     for (const character of text) {
+      await ready?.();
       if (character === "\n") {
         await tmux(["send-keys", "-l", "-t", name, "\\"]);
         await tmux(["send-keys", "-t", name, "Enter"]);
@@ -262,6 +263,7 @@ function holdTmux(host, options, hear, left) {
       }
       await delay(typingDelay());
     }
+    await ready?.();
     await tmux(["send-keys", "-t", name, "Enter"]);
   };
   const close = async () => {
@@ -276,6 +278,34 @@ function holdTmux(host, options, hear, left) {
     left();
   };
   return {
+    async inject(text, images = [], before = []) {
+      if (ended || !running || !turn || stopping) throw new Error("Claude Code is no longer working. Your message is still queued.");
+      if (submitting || answering || pending !== void 0) throw new Error("Answer Claude Code's question before sending this message.");
+      submitting = true;
+      let typed = false;
+      const ready = async () => {
+        if (ended || stopping || !turn || !await alive()) throw new Error("Claude Code is no longer working. Your message is still queued.");
+        const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
+        if (screen.kind !== "working") throw new Error(screen.kind === "question" ? "Answer Claude Code's question before sending this message." : "Claude Code is not ready to receive this message. Your message is still queued.");
+      };
+      try {
+        await ready();
+        const paths = await imagesIn(images);
+        await ready();
+        const prompt = [...before, text, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
+        typed = true;
+        await keys(prompt, ready);
+        idle = 0;
+      } catch (error) {
+        if (typed && !ended) {
+          const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]).catch(() => ""));
+          if (screen.kind === "working" || screen.kind === "idle") await tmux(["send-keys", "-t", name, "C-u"]).catch(() => void 0);
+        }
+        throw error;
+      } finally {
+        submitting = false;
+      }
+    },
     send(text, images = [], before = []) {
       if (ended) return;
       submitting = true;
