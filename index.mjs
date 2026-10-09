@@ -7,8 +7,8 @@ var __export = (target, all) => {
 // src/provider.mjs
 import { execFile as execFile2 } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, open as open3, rm as rm2, stat as stat3, writeFile } from "node:fs/promises";
-import { homedir as homedir6, tmpdir } from "node:os";
+import { mkdir, mkdtemp, open as open3, rm as rm2, stat as stat3, writeFile } from "node:fs/promises";
+import { homedir as homedir5, tmpdir } from "node:os";
 import { join as join4 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -33,7 +33,6 @@ __export(claude_runtime_exports, {
   readGoal: () => readGoal,
   readLinks: () => readLinks,
   readMcp: () => readMcp,
-  readUsage: () => readUsage,
   searchClaude: () => searchClaude
 });
 import { createRequire as geckitCreateRequire } from "node:module";
@@ -57,9 +56,6 @@ import { homedir as homedir4 } from "node:os";
 import { createInterface as createInterface3 } from "node:readline";
 import { open as open2, readdir as readdir2, stat as stat2 } from "node:fs/promises";
 import { join as join3 } from "node:path";
-import { spawn as spawn4 } from "node:child_process";
-import { homedir as homedir5 } from "node:os";
-import { createInterface as createInterface4 } from "node:readline";
 var require2 = geckitCreateRequire(import.meta.url);
 var OFF_PLAN = [
   "ANTHROPIC_API_KEY",
@@ -637,16 +633,6 @@ function planWindow(value) {
 function plan(fiveHour, sevenDay) {
   if (fiveHour === void 0 && sevenDay === void 0) return void 0;
   return { ...fiveHour === void 0 ? {} : { fiveHour }, ...sevenDay === void 0 ? {} : { sevenDay } };
-}
-function usageWindow(value) {
-  const window = object(value);
-  const part = window["utilization"];
-  const at = Date.parse(string2(window["resets_at"]));
-  return typeof part === "number" && !Number.isNaN(at) ? { part: part / 100, resetsAt: at } : void 0;
-}
-function planOf(answer) {
-  const limits = object(answer["rate_limits"]);
-  return plan(usageWindow(limits["five_hour"]), usageWindow(limits["seven_day"]));
 }
 function readClaude(state, message) {
   const out = empty();
@@ -1662,83 +1648,6 @@ function searchClaude(roots, asked, foldersOf = folders) {
   queue = searched.catch(() => void 0);
   return searched;
 }
-var PATIENCE4 = 2e4;
-function controlResponse(line) {
-  let message;
-  try {
-    message = JSON.parse(line);
-  } catch {
-    return void 0;
-  }
-  if (message["type"] !== "control_response") return void 0;
-  const response = message["response"] ?? {};
-  const id = typeof response["request_id"] === "string" ? response["request_id"] : "";
-  return { id, ok: response["subtype"] === "success", answer: response["response"] ?? {} };
-}
-function readUsage(models) {
-  return new Promise((done) => {
-    const child = spawn4(
-      claudeCommand(),
-      [
-        "-p",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--no-session-persistence",
-        "--strict-mcp-config",
-        "--settings",
-        JSON.stringify({ disableAllHooks: true })
-      ],
-      { cwd: homedir5(), stdio: ["pipe", "pipe", "ignore"], env: planOnly(), windowsHide: true }
-    );
-    let plan2;
-    const windows = new Map(models.map((model) => [model, void 0]));
-    const asks = [
-      { id: "usage", request: { subtype: "get_usage", skip_behaviors: true } },
-      ...models.flatMap((model, index) => [
-        { id: `model:${String(index)}`, request: { subtype: "set_model", model } },
-        { id: `window:${String(index)}`, request: { subtype: "get_context_usage", detail: "summary" } }
-      ])
-    ];
-    let next = 0;
-    let over = false;
-    const finish = () => {
-      if (over) return;
-      over = true;
-      clearTimeout(patience);
-      child.stdin.end();
-      child.kill();
-      done({ ...plan2 === void 0 ? {} : { plan: plan2 }, windows });
-    };
-    const patience = setTimeout(finish, PATIENCE4);
-    const ask = () => {
-      const one = asks[next++];
-      if (one === void 0) return finish();
-      child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: one.id, request: one.request })}
-`);
-    };
-    createInterface4({ input: child.stdout }).on("line", (line) => {
-      const read2 = controlResponse(line);
-      if (read2 === void 0) return;
-      const { id, ok, answer } = read2;
-      if (ok) {
-        if (id === "usage") plan2 = planOf(answer);
-        const model = id.startsWith("window:") ? models[Number(id.slice("window:".length))] : void 0;
-        const most = answer["maxTokens"];
-        if (model !== void 0 && typeof most === "number" && most > 0) windows.set(model, most);
-      } else if (id.startsWith("model:")) {
-        next += 1;
-      }
-      ask();
-    });
-    child.on("error", finish);
-    child.on("close", finish);
-    child.stdin.on("error", () => void 0);
-    ask();
-  });
-}
 
 // src/provider.mjs
 var typingDelay = () => 15 + Math.floor(Math.random() * 31);
@@ -1978,7 +1887,7 @@ function holdTmux(runtime, options, hear, left) {
     if (path !== void 0) offset = (await stat3(path)).size;
     const env = environment();
     const omitted = [...OFF_PLAN2, ...Object.keys(planOnly2()).filter((key) => key.startsWith("GECKIT_"))];
-    const config = env.CLAUDE_CONFIG_DIR ?? join4(homedir6(), ".claude");
+    const config = env.CLAUDE_CONFIG_DIR ?? join4(homedir5(), ".claude");
     const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand2(env), ...terminalArgs(options, config)].map(quote).join(" ");
     await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch]);
     if (ended) {
@@ -2123,7 +2032,110 @@ function holdTmux(runtime, options, hear, left) {
     end: close
   };
 }
+var MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+var HOUR = 36e5;
+var PERIODS = { fiveHour: 5 * HOUR, sevenDay: 7 * 24 * HOUR };
+function resetTime(line, now) {
+  const match = /Resets\s+(?:([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)/i.exec(line);
+  if (match === null) return void 0;
+  const [, month, day, hour, minute, half] = match;
+  const today = new Date(now);
+  const at = new Date(today.getFullYear(), month === void 0 ? today.getMonth() : MONTHS.indexOf(month.toLowerCase()), month === void 0 ? today.getDate() : Number(day), Number(hour) % 12 + (half.toLowerCase() === "pm" ? 12 : 0), Number(minute ?? 0));
+  if (month === void 0 && at.getTime() <= now) at.setDate(at.getDate() + 1);
+  if (month !== void 0 && at.getTime() < now - 24 * HOUR) at.setFullYear(at.getFullYear() + 1);
+  return at.getTime();
+}
+function usageScreen(text2, now = Date.now()) {
+  const lines = plain2(text2).split("\n").map((line) => line.trim());
+  const window = (title) => {
+    const at = lines.indexOf(title);
+    if (at === -1) return void 0;
+    const near = lines.slice(at + 1, at + 4);
+    const used = near.map((line) => /(\d+(?:\.\d+)?)% used/.exec(line)).find((found) => found !== null);
+    const resetsAt = near.map((line) => resetTime(line, now)).find((found) => found !== void 0);
+    return used === void 0 || resetsAt === void 0 ? void 0 : { part: Number(used[1]) / 100, resetsAt };
+  };
+  const fiveHour = window("Current session");
+  const sevenDay = window("Current week (all models)");
+  if (fiveHour === void 0 && sevenDay === void 0) return void 0;
+  return { ...fiveHour === void 0 ? {} : { fiveHour }, ...sevenDay === void 0 ? {} : { sevenDay } };
+}
+function planNow(plan2, now) {
+  const shown2 = {};
+  for (const [key, window] of Object.entries(plan2)) {
+    let resetsAt = window.resetsAt;
+    while (resetsAt <= now) resetsAt += PERIODS[key];
+    shown2[key] = resetsAt === window.resetsAt ? window : { part: 0, resetsAt };
+  }
+  return shown2;
+}
+function usageReader(runtime, { name = "geckit-claude-usage", folder = join4(tmpdir(), "geckit-claude-usage"), every = () => (15 + Math.random() * 15) * 6e4 } = {}) {
+  const { claudeCommand: claudeCommand2, OFF_PLAN: OFF_PLAN2, planOnly: planOnly2 } = runtime;
+  const environment = () => Object.fromEntries(Object.entries(planOnly2()).filter(([key]) => !key.startsWith("GECKIT_")));
+  const tmux = (args) => new Promise((resolve2, reject) => {
+    execFile2("tmux", [...args], { env: environment(), windowsHide: true }, (error, stdout, stderr) => {
+      if (error !== null) reject(new Error(stderr.trim() || error.message));
+      else resolve2(stdout.trim());
+    });
+  });
+  const screen = () => tmux(["capture-pane", "-p", "-J", "-t", name]);
+  let plan2;
+  let next = 0;
+  let reading;
+  const read2 = async () => {
+    if (await tmux(["has-session", "-t", name]).then(() => true, () => false)) await tmux(["send-keys", "-t", name, "Escape"]);
+    else {
+      await mkdir(folder, { recursive: true });
+      const env = environment();
+      const omitted = [...OFF_PLAN2, ...Object.keys(planOnly2()).filter((key) => key.startsWith("GECKIT_"))];
+      const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand2(env)].map(quote).join(" ");
+      await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "150", "-c", folder, launch]);
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      if (attempt === 300) throw new Error("Claude Code did not become ready for /usage.");
+      const shown2 = terminalScreen(await screen());
+      if (shown2.trust && shown2.trustFocus === 0) await tmux(["send-keys", "-t", name, "Down"]);
+      else if (shown2.trust && shown2.trustFocus === 1) await tmux(["send-keys", "-t", name, "Enter"]);
+      else if (shown2.kind === "idle") break;
+      await delay(shown2.trust ? 700 : 100);
+    }
+    await tmux(["send-keys", "-l", "-t", name, "/usage"]);
+    await delay(500);
+    await tmux(["send-keys", "-t", name, "Enter"]);
+    try {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        await delay(100);
+        if (!/% used/.test(await screen())) continue;
+        await delay(1e3);
+        return usageScreen(await screen());
+      }
+      return void 0;
+    } finally {
+      await tmux(["send-keys", "-t", name, "Escape"]).catch(() => void 0);
+    }
+  };
+  return {
+    async plan() {
+      if (Date.now() >= next) {
+        reading ??= read2().then((found) => {
+          if (found !== void 0) plan2 = found;
+        }, () => void 0).finally(() => {
+          next = Date.now() + every();
+          reading = void 0;
+        });
+        await reading;
+      }
+      return plan2 === void 0 ? void 0 : planNow(plan2, Date.now());
+    },
+    heard(said) {
+      plan2 = { ...plan2, ...said };
+    },
+    dispose: () => tmux(["kill-session", "-t", name]).catch(() => void 0)
+  };
+}
 function create() {
+  const usage = usageReader(claude_runtime_exports);
+  let known = [];
   return {
     id: "claude-tmux",
     family: "claude",
@@ -2147,8 +2159,15 @@ function create() {
     },
     account: () => claudeAccount(),
     program: () => claudeProgram(),
-    models: () => claudeModels(),
-    limits: (models) => readUsage(models),
+    models: async () => {
+      const found = await claudeModels();
+      if (found !== void 0) known = found;
+      return found;
+    },
+    limits: async (models) => {
+      const plan2 = await usage.plan();
+      return { windows: new Map(models.map((model) => [model, known.find((one) => one.value === model || one.id === model)?.contextWindow])), ...plan2 === void 0 ? {} : { plan: plan2 } };
+    },
     list: async (roots) => {
       const rows = [];
       for (const root of roots) {
@@ -2181,12 +2200,19 @@ function create() {
     correct: async () => ({ ok: false, error: "Claude Code correction is not available." }),
     delete: (root, id) => deleteClaude(root, id),
     dispose: () => {
+      void usage.dispose();
     },
-    hold: (options, hear, left) => holdTmux(claude_runtime_exports, options, hear, left)
+    hold: (options, hear, left) => holdTmux(claude_runtime_exports, options, (heard) => {
+      for (const signal of heard.signals) if (signal.kind === "plan") usage.heard(signal.plan);
+      hear(heard);
+    }, left)
   };
 }
 export {
   create,
   holdTmux,
-  terminalScreen
+  planNow,
+  terminalScreen,
+  usageReader,
+  usageScreen
 };

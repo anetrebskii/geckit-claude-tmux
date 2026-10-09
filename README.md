@@ -20,7 +20,11 @@ Native numbered approvals and questions appear as existing GeckIt question cards
 
 ## Own code
 
-The plugin uses nothing of GeckIt's builtin Claude provider. Account, models, plan limits, history, search, MCP and browser lists come from `src/claude-runtime.mjs`, a copy of GeckIt's Claude code (see `UPSTREAM.md`). Plan limits are read the way GeckIt reads them: a separate `claude -p` with no message is asked `get_usage` over stdio. `src/provider.mjs` is the adapter; `index.mjs` is the built entry GeckIt installs, rebuilt with `npm ci && npm run build` and committed.
+The plugin uses nothing of GeckIt's builtin Claude provider. Account, models, history, search, MCP and browser lists come from `src/claude-runtime.mjs`, a copy of GeckIt's Claude code (see `UPSTREAM.md`). `src/provider.mjs` is the adapter; `index.mjs` is the built entry GeckIt installs, rebuilt with `npm ci && npm run build` and committed.
+
+## Plan limits
+
+Plan limits come only through tmux. The plugin keeps one tmux session, `geckit-claude-usage`, running interactive Claude Code in a folder of its own under the system temp folder, confirms the folder's trust prompt once, types `/usage`, reads the `Current session` and `Current week (all models)` rows with their reset times, and presses Esc. It asks at most once every 15 to 30 minutes, at a random point; between checks GeckIt is answered from memory. A window whose remembered reset time has passed is shown as empty, with the next reset one period later, without asking. Windows that `rate_limit_event` lines in a conversation's transcript report are remembered too. Context sizes come from the model list already read. The session is closed when the provider is disposed.
 
 ## Verification
 

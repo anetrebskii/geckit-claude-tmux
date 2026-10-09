@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
-import { create, holdTmux, terminalScreen } from '../index.mjs'
+import { create, holdTmux, planNow, terminalScreen, usageReader, usageScreen } from '../index.mjs'
 
 const available = (() => {
   try { execFileSync('tmux', ['-V']); return process.platform !== 'win32' }
@@ -38,6 +38,43 @@ test('recognizes native states without interpreting reply text as a selection', 
   assert.deepEqual(native.options.map((one) => one.label), ['Red', 'Blue', 'Type something.', 'Chat about this'])
   assert.equal(terminalScreen('Quick safety check:\nIs this a project you created or one you trust?\nEnter to confirm').trust, true)
 })
+test('reads the plan windows from the /usage screen', () => {
+  const now = new Date(2026, 9, 9, 10, 0).getTime()
+  const plan = usageScreen('Current session\n████   4% used\nResets 1:40pm (Europe/Samara)\n\nCurrent week (all models)\n██  61% used\nResets Oct 14, 9am (Europe/Samara)\n', now)
+  assert.deepEqual(plan, { fiveHour: { part: 0.04, resetsAt: new Date(2026, 9, 9, 13, 40).getTime() }, sevenDay: { part: 0.61, resetsAt: new Date(2026, 9, 14, 9, 0).getTime() } })
+  assert.equal(usageScreen('Resets 9am\nCurrent session\n', now), undefined)
+  const late = new Date(2026, 9, 9, 23, 0).getTime()
+  assert.equal(usageScreen('Current session\n10% used\nResets 2am (Europe/Samara)\n', late).fiveHour.resetsAt, new Date(2026, 9, 10, 2, 0).getTime())
+})
+
+test('counts a passed reset as an empty window without asking again', () => {
+  const resetsAt = new Date(2026, 9, 9, 13, 40).getTime()
+  const plan = { fiveHour: { part: 0.9, resetsAt }, sevenDay: { part: 0.5, resetsAt: resetsAt + 86400000 } }
+  assert.deepEqual(planNow(plan, resetsAt - 1), plan)
+  assert.deepEqual(planNow(plan, resetsAt + 1), { fiveHour: { part: 0, resetsAt: resetsAt + 5 * 3600000 }, sevenDay: plan.sevenDay })
+})
+
+test('asks /usage through tmux at most once per interval and remembers what conversations say', { skip: !available, timeout: 50000 }, async () => {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-usage-test-')))
+  const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
+  await chmod(binary, 0o755)
+  const log = join(folder, 'undefined.log')
+  const usage = usageReader({ claudeCommand: () => binary, OFF_PLAN: [], planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder, CLAUDE_TEST_TRUST: '1' }) }, { name: `usage-${randomUUID().slice(0, 8)}`, folder: join(folder, 'usage'), every: () => 3600000 })
+  const asked = async () => (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line)).filter((one) => one.prompt === '/usage').length
+  try {
+    const first = await usage.plan()
+    assert.equal(first.fiveHour.part, 0.25)
+    assert.equal(first.sevenDay.part, 0.07)
+    assert.equal(new Date(first.sevenDay.resetsAt).getDate(), 14)
+    usage.heard({ fiveHour: { part: 0.3, resetsAt: first.fiveHour.resetsAt } })
+    assert.equal((await usage.plan()).fiveHour.part, 0.3)
+    assert.equal(await asked(), 1)
+  } finally {
+    await usage.dispose()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
 test('implements the provider without a host', async () => {
   const provider = create()
   for (const method of ['account', 'program', 'models', 'limits', 'list', 'search', 'hidden', 'create', 'fork', 'has', 'read', 'links', 'goal', 'setGoal', 'clearGoal', 'hold', 'rename', 'remote', 'mcp', 'browsers', 'correct', 'setInstructions', 'delete', 'dispose']) assert.equal(typeof provider[method], 'function', method)

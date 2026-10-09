@@ -600,16 +600,6 @@ function plan(fiveHour, sevenDay) {
   if (fiveHour === void 0 && sevenDay === void 0) return void 0;
   return { ...fiveHour === void 0 ? {} : { fiveHour }, ...sevenDay === void 0 ? {} : { sevenDay } };
 }
-function usageWindow(value) {
-  const window = object(value);
-  const part = window["utilization"];
-  const at = Date.parse(string2(window["resets_at"]));
-  return typeof part === "number" && !Number.isNaN(at) ? { part: part / 100, resetsAt: at } : void 0;
-}
-function planOf(answer) {
-  const limits = object(answer["rate_limits"]);
-  return plan(usageWindow(limits["five_hour"]), usageWindow(limits["seven_day"]));
-}
 function readClaude(state, message) {
   const out = empty();
   const type = string2(message["type"]);
@@ -1650,88 +1640,6 @@ function searchClaude(roots, asked, foldersOf = folders) {
   queue = searched.catch(() => void 0);
   return searched;
 }
-
-// src/main/sessions/usage.ts
-import { spawn as spawn4 } from "node:child_process";
-import { homedir as homedir5 } from "node:os";
-import { createInterface as createInterface4 } from "node:readline";
-var PATIENCE4 = 2e4;
-function controlResponse(line) {
-  let message;
-  try {
-    message = JSON.parse(line);
-  } catch {
-    return void 0;
-  }
-  if (message["type"] !== "control_response") return void 0;
-  const response = message["response"] ?? {};
-  const id = typeof response["request_id"] === "string" ? response["request_id"] : "";
-  return { id, ok: response["subtype"] === "success", answer: response["response"] ?? {} };
-}
-function readUsage(models) {
-  return new Promise((done) => {
-    const child = spawn4(
-      claudeCommand(),
-      [
-        "-p",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--no-session-persistence",
-        "--strict-mcp-config",
-        "--settings",
-        JSON.stringify({ disableAllHooks: true })
-      ],
-      { cwd: homedir5(), stdio: ["pipe", "pipe", "ignore"], env: planOnly(), windowsHide: true }
-    );
-    let plan2;
-    const windows = new Map(models.map((model) => [model, void 0]));
-    const asks = [
-      { id: "usage", request: { subtype: "get_usage", skip_behaviors: true } },
-      ...models.flatMap((model, index) => [
-        { id: `model:${String(index)}`, request: { subtype: "set_model", model } },
-        { id: `window:${String(index)}`, request: { subtype: "get_context_usage", detail: "summary" } }
-      ])
-    ];
-    let next = 0;
-    let over = false;
-    const finish = () => {
-      if (over) return;
-      over = true;
-      clearTimeout(patience);
-      child.stdin.end();
-      child.kill();
-      done({ ...plan2 === void 0 ? {} : { plan: plan2 }, windows });
-    };
-    const patience = setTimeout(finish, PATIENCE4);
-    const ask = () => {
-      const one = asks[next++];
-      if (one === void 0) return finish();
-      child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: one.id, request: one.request })}
-`);
-    };
-    createInterface4({ input: child.stdout }).on("line", (line) => {
-      const read2 = controlResponse(line);
-      if (read2 === void 0) return;
-      const { id, ok, answer } = read2;
-      if (ok) {
-        if (id === "usage") plan2 = planOf(answer);
-        const model = id.startsWith("window:") ? models[Number(id.slice("window:".length))] : void 0;
-        const most = answer["maxTokens"];
-        if (model !== void 0 && typeof most === "number" && most > 0) windows.set(model, most);
-      } else if (id.startsWith("model:")) {
-        next += 1;
-      }
-      ask();
-    });
-    child.on("error", finish);
-    child.on("close", finish);
-    child.stdin.on("error", () => void 0);
-    ask();
-  });
-}
 export {
   OFF_PLAN,
   claudeAccount,
@@ -1751,6 +1659,5 @@ export {
   readGoal,
   readLinks,
   readMcp,
-  readUsage,
   searchClaude
 };

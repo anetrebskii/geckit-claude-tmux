@@ -35,6 +35,7 @@ const reply = (text) => {
 const say = (prompt) => {
   record({ prompt })
   if (prompt === 'crash') process.exit(1)
+  if (prompt === '/usage') { paint(`Settings  Status   Config   Usage   Stats\n\nCurrent session\n████          25% used\nResets 3pm (Test/Zone)\n\nCurrent week (all models)\n██            7% used\nResets Oct 14, 9:30am (Test/Zone)\nEsc to cancel\n`); return }
   if (prompt === 'quiet') { idle(); return }
   if (prompt === '/local') {
     write({ type: 'system', subtype: 'local_command', isMeta: true, commandRun: '/local', content: 'Local result' })
@@ -79,6 +80,7 @@ process.stdin.on('data', (chunk) => {
       if (menu) { selection = Math.max(0, Math.min(menu.options.length - 1, selection + (chunk[i + 2] === 'A' ? -1 : 1))); choices() }
       i += 2; continue
     }
+    if (chunk[i] === '\x1b') { record({ escaped: true }); if (!busy && !menu && !trusting) idle(); continue }
     const c = chunk[i]
     if (c === '\x03') { clearTimeout(timer); queued.length = 0; menu = undefined; record({ stopped: true }); idle(); continue }
     if (c === '\x15') { input = ''; record({ clearedInput: true }); continue }

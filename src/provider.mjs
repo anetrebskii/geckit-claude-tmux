@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -369,7 +369,113 @@ function holdTmux(runtime, options, hear, left) {
     end: close
   };
 }
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const HOUR = 3600000;
+const PERIODS = { fiveHour: 5 * HOUR, sevenDay: 7 * 24 * HOUR };
+
+function resetTime(line, now) {
+  const match = /Resets\s+(?:([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)/i.exec(line);
+  if (match === null) return void 0;
+  const [, month, day, hour, minute, half] = match;
+  const today = new Date(now);
+  const at = new Date(today.getFullYear(), month === void 0 ? today.getMonth() : MONTHS.indexOf(month.toLowerCase()), month === void 0 ? today.getDate() : Number(day), Number(hour) % 12 + (half.toLowerCase() === "pm" ? 12 : 0), Number(minute ?? 0));
+  if (month === void 0 && at.getTime() <= now) at.setDate(at.getDate() + 1);
+  if (month !== void 0 && at.getTime() < now - 24 * HOUR) at.setFullYear(at.getFullYear() + 1);
+  return at.getTime();
+}
+
+function usageScreen(text, now = Date.now()) {
+  const lines = plain(text).split("\n").map((line) => line.trim());
+  const window = (title) => {
+    const at = lines.indexOf(title);
+    if (at === -1) return void 0;
+    const near = lines.slice(at + 1, at + 4);
+    const used = near.map((line) => /(\d+(?:\.\d+)?)% used/.exec(line)).find((found) => found !== null);
+    const resetsAt = near.map((line) => resetTime(line, now)).find((found) => found !== void 0);
+    return used === void 0 || resetsAt === void 0 ? void 0 : { part: Number(used[1]) / 100, resetsAt };
+  };
+  const fiveHour = window("Current session");
+  const sevenDay = window("Current week (all models)");
+  if (fiveHour === void 0 && sevenDay === void 0) return void 0;
+  return { ...fiveHour === void 0 ? {} : { fiveHour }, ...sevenDay === void 0 ? {} : { sevenDay } };
+}
+
+function planNow(plan, now) {
+  const shown = {};
+  for (const [key, window] of Object.entries(plan)) {
+    let resetsAt = window.resetsAt;
+    while (resetsAt <= now) resetsAt += PERIODS[key];
+    shown[key] = resetsAt === window.resetsAt ? window : { part: 0, resetsAt };
+  }
+  return shown;
+}
+
+function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpdir(), "geckit-claude-usage"), every = () => (15 + Math.random() * 15) * 60000 } = {}) {
+  const { claudeCommand, OFF_PLAN, planOnly } = runtime;
+  const environment = () => Object.fromEntries(Object.entries(planOnly()).filter(([key]) => !key.startsWith("GECKIT_")));
+  const tmux = (args) => new Promise((resolve, reject) => {
+    execFile("tmux", [...args], { env: environment(), windowsHide: true }, (error, stdout, stderr) => {
+      if (error !== null) reject(new Error(stderr.trim() || error.message));
+      else resolve(stdout.trim());
+    });
+  });
+  const screen = () => tmux(["capture-pane", "-p", "-J", "-t", name]);
+  let plan;
+  let next = 0;
+  let reading;
+  const read = async () => {
+    if (await tmux(["has-session", "-t", name]).then(() => true, () => false)) await tmux(["send-keys", "-t", name, "Escape"]);
+    else {
+      await mkdir(folder, { recursive: true });
+      const env = environment();
+      const omitted = [...OFF_PLAN, ...Object.keys(planOnly()).filter((key) => key.startsWith("GECKIT_"))];
+      const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand(env)].map(quote).join(" ");
+      await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "150", "-c", folder, launch]);
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      if (attempt === 300) throw new Error("Claude Code did not become ready for /usage.");
+      const shown = terminalScreen(await screen());
+      if (shown.trust && shown.trustFocus === 0) await tmux(["send-keys", "-t", name, "Down"]);
+      else if (shown.trust && shown.trustFocus === 1) await tmux(["send-keys", "-t", name, "Enter"]);
+      else if (shown.kind === "idle") break;
+      await delay(shown.trust ? 700 : 100);
+    }
+    await tmux(["send-keys", "-l", "-t", name, "/usage"]);
+    await delay(500);
+    await tmux(["send-keys", "-t", name, "Enter"]);
+    try {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        await delay(100);
+        if (!/% used/.test(await screen())) continue;
+        await delay(1000);
+        return usageScreen(await screen());
+      }
+      return void 0;
+    } finally {
+      await tmux(["send-keys", "-t", name, "Escape"]).catch(() => void 0);
+    }
+  };
+  return {
+    async plan() {
+      if (Date.now() >= next) {
+        reading ??= read().then((found) => { if (found !== void 0) plan = found; }, () => void 0).finally(() => {
+          next = Date.now() + every();
+          reading = void 0;
+        });
+        await reading;
+      }
+      return plan === void 0 ? void 0 : planNow(plan, Date.now());
+    },
+    heard(said) {
+      plan = { ...plan, ...said };
+    },
+    dispose: () => tmux(["kill-session", "-t", name]).catch(() => void 0)
+  };
+}
+
 function create() {
+  const usage = usageReader(claude);
+  let known = [];
   return {
     id: "claude-tmux", family: "claude", transport: "tmux",
     name: "Claude Code (tmux)", shortName: "Claude", icon: "claude", browser: "claude",
@@ -378,8 +484,15 @@ function create() {
     instructions: "own", setInstructions: async () => {},
     account: () => claude.claudeAccount(),
     program: () => claude.claudeProgram(),
-    models: () => claude.claudeModels(),
-    limits: (models) => claude.readUsage(models),
+    models: async () => {
+      const found = await claude.claudeModels();
+      if (found !== void 0) known = found;
+      return found;
+    },
+    limits: async (models) => {
+      const plan = await usage.plan();
+      return { windows: new Map(models.map((model) => [model, known.find((one) => one.value === model || one.id === model)?.contextWindow])), ...plan === void 0 ? {} : { plan } };
+    },
     list: async (roots) => {
       const rows = [];
       for (const root of roots) {
@@ -408,8 +521,11 @@ function create() {
     browsers: async (root, pick) => root === void 0 ? void 0 : claude.readBrowsers(root, pick),
     correct: async () => ({ ok: false, error: "Claude Code correction is not available." }),
     delete: (root, id) => claude.deleteClaude(root, id),
-    dispose: () => {},
-    hold: (options, hear, left) => holdTmux(claude, options, hear, left)
+    dispose: () => { void usage.dispose(); },
+    hold: (options, hear, left) => holdTmux(claude, options, (heard) => {
+      for (const signal of heard.signals) if (signal.kind === "plan") usage.heard(signal.plan);
+      hear(heard);
+    }, left)
   };
 }
-export { create, holdTmux, terminalScreen };
+export { create, holdTmux, planNow, terminalScreen, usageReader, usageScreen };
