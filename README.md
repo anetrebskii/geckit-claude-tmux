@@ -24,7 +24,13 @@ The plugin uses nothing of GeckIt's builtin Claude provider. Account, models, hi
 
 ## Plan limits
 
-Plan limits come only through tmux. The plugin keeps one tmux session, `geckit-claude-usage`, running interactive Claude Code in a folder of its own under the system temp folder, confirms the folder's trust prompt once, types `/usage`, reads the `Current session` and `Current week (all models)` rows with their reset times, and presses Esc. It asks at most once every 15 to 30 minutes, at a random point; between checks GeckIt is answered from memory. A window whose remembered reset time has passed is shown as empty, with the next reset one period later, without asking. Windows that `rate_limit_event` lines in a conversation's transcript report are remembered too. Context sizes come from the model list already read. The session is closed when the provider is disposed.
+Plan limits come only through tmux. The plugin keeps one tmux session, `geckit-claude-usage`, running interactive Claude Code in a folder of its own under the system temp folder, confirms the folder's trust prompt once, types `/usage`, reads the `Current session` and `Current week (all models)` rows with their reset times, and presses Esc. It checks once initially, then only after a new message has been successfully sent since the previous check began and the randomized 15-30 minute cooldown has elapsed. Send now deliveries count too; failed sends do not. Without new messages it keeps answering from memory. A window whose remembered reset time has passed is shown as empty, with the next reset one period later, without asking. Windows that `rate_limit_event` lines in a conversation's transcript report are remembered too. Context sizes come from the model list already read. The session is closed when the provider is disposed.
+
+## Logs
+
+An updated GeckIt host passes `context.log` to this library. Its file is `<GeckIt userData>/provider-logs/plugin-claude-tmux.jsonl`, with one `.jsonl.1` backup (2 MiB each). On macOS the installed app uses `~/Library/Application Support/geckit/`; development uses `geckit-local/`. Older hosts without logging continue working.
+
+Follow the file with `tail -F`. Count `usage.command.sent` to audit actual `/usage` submissions, rather than `limits.host.requested` (app polling). `usage.check.started/completed/failed/skipped` records check IDs, messages since the last check, outcomes and next allowed check times. Skip reasons distinguish `no-new-messages`, `cooldown` and `in-flight`. `message.sent` records accepted ordinary/Send now delivery without its text. Session lifecycle and turn outcomes omit prompts, replies and tool arguments. The host adds timestamps, plugin identity and load correlation. The first check initializes limits; later checks require a successful send and the cooldown.
 
 ## Verification
 

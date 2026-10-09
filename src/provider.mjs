@@ -51,7 +51,7 @@ function terminalScreen(text) {
   return { kind: busy ? 'working' : bordered ? 'idle' : 'unknown', trust, trustFocus }
 }
 
-function holdTmux(runtime, options, hear, left) {
+function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {}) {
   const { claudeCommand, OFF_PLAN, planOnly, claudeState, readClaude, claudeFile } = runtime;
   const environment = () => Object.fromEntries(Object.entries(planOnly()).filter(([key]) => !key.startsWith("GECKIT_")));
   const tmux = (args, input) => new Promise((resolve, reject) => {
@@ -84,7 +84,14 @@ function holdTmux(runtime, options, hear, left) {
   let trustHandled = false;
   let imagesDirectory;
   let submitting = false;
-  const emit = (items = [], gone = [], signals = []) => { if (!ended) hear({ items, gone, signals }); };
+  const emit = (items = [], gone = [], signals = []) => {
+    if (ended) return;
+    for (const signal of signals) {
+      if (signal.kind === "begun") log("info", "session.turn.begun", { session: options.id });
+      if (signal.kind === "ended") log(signal.how === "failed" ? "warn" : "info", "session.turn.ended", { session: options.id, outcome: signal.how });
+    }
+    hear({ items, gone, signals });
+  };
   const read = async () => {
     const path = await claudeFile(options.root, options.id);
     if (path === void 0) return;
@@ -241,6 +248,7 @@ function holdTmux(runtime, options, hear, left) {
     await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch]);
     if (ended) { await tmux(["kill-session", "-t", name]).catch(() => void 0); return; }
     running = true;
+    log("info", "session.started", { session: options.id, resumed: options.resume === true });
     poll = setInterval(() => { void catchUp(); }, 500);
   };
   const waitForPrompt = async () => {
@@ -276,6 +284,7 @@ function holdTmux(runtime, options, hear, left) {
     await tmux(["kill-session", "-t", name]).catch(() => void 0);
     await reading;
     await clearImages();
+    log("info", "session.closed", { session: options.id });
     left();
   };
   return {
@@ -296,6 +305,7 @@ function holdTmux(runtime, options, hear, left) {
         const prompt = [...before, text, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
         typed = true;
         await keys(prompt, ready);
+        sent("inject");
         idle = 0;
       } catch (error) {
         if (typed && !ended) {
@@ -323,6 +333,7 @@ function holdTmux(runtime, options, hear, left) {
         await waitForPrompt();
         emit([], [], [{ kind: "doing", what: "sending to Claude Code" }]);
         await keys(prompt);
+        sent("send");
         emit([], [], [{ kind: "doing", what: "waiting for Claude Code" }]);
       });
       void sending.finally(() => { submitting = false; }).catch((error) => {
@@ -410,7 +421,7 @@ function planNow(plan, now) {
   return shown;
 }
 
-function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpdir(), "geckit-claude-usage"), every = () => (15 + Math.random() * 15) * 60000 } = {}) {
+function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpdir(), "geckit-claude-usage"), every = () => (15 + Math.random() * 15) * 60000, log = () => {} } = {}) {
   const { claudeCommand, OFF_PLAN, planOnly } = runtime;
   const environment = () => Object.fromEntries(Object.entries(planOnly()).filter(([key]) => !key.startsWith("GECKIT_")));
   const tmux = (args) => new Promise((resolve, reject) => {
@@ -423,7 +434,10 @@ function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpd
   let plan;
   let next = 0;
   let reading;
-  const read = async () => {
+  let messages = 0;
+  let checked = -1;
+  let checks = 0;
+  const read = async (checkId) => {
     if (await tmux(["has-session", "-t", name]).then(() => true, () => false)) await tmux(["send-keys", "-t", name, "Escape"]);
     else {
       await mkdir(folder, { recursive: true });
@@ -443,6 +457,7 @@ function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpd
     await tmux(["send-keys", "-l", "-t", name, "/usage"]);
     await delay(500);
     await tmux(["send-keys", "-t", name, "Enter"]);
+    log("info", "usage.command.sent", { checkId, command: "/usage" });
     try {
       for (let attempt = 0; attempt < 200; attempt += 1) {
         await delay(100);
@@ -457,14 +472,33 @@ function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpd
   };
   return {
     async plan() {
-      if (Date.now() >= next) {
-        reading ??= read().then((found) => { if (found !== void 0) plan = found; }, () => void 0).finally(() => {
+      const now = Date.now();
+      const messagesSinceCheck = messages - Math.max(0, checked);
+      const reason = reading !== void 0 ? "in-flight" : messages === checked ? "no-new-messages" : now < next ? "cooldown" : void 0;
+      if (reason !== void 0) log("debug", "usage.check.skipped", { reason, messagesSinceCheck, nextCheckAt: next });
+      else {
+        const checkId = ++checks;
+        const began = now;
+        checked = messages;
+        log("info", "usage.check.started", { checkId, messagesSinceCheck });
+        let outcome = "unreadable";
+        reading = read(checkId).then((found) => {
+          if (found !== void 0) { plan = found; outcome = "completed"; }
+        }, (error) => {
+          outcome = "failed";
+          log("warn", "usage.check.error", { checkId, errorKind: error?.name ?? "Error" });
+        }).finally(() => {
           next = Date.now() + every();
+          log(outcome === "completed" ? "info" : "warn", outcome === "completed" ? "usage.check.completed" : "usage.check.failed", { checkId, outcome, durationMs: Date.now() - began, nextCheckAt: next });
           reading = void 0;
         });
-        await reading;
       }
+      await reading;
       return plan === void 0 ? void 0 : planNow(plan, Date.now());
+    },
+    sent(delivery = "send") {
+      messages += 1;
+      log("info", "message.sent", { delivery, messagesSinceCheck: messages - Math.max(0, checked) });
     },
     heard(said) {
       plan = { ...plan, ...said };
@@ -473,8 +507,10 @@ function usageReader(runtime, { name = "geckit-claude-usage", folder = join(tmpd
   };
 }
 
-function create() {
-  const usage = usageReader(claude);
+function create(context = {}) {
+  const log = (level, event, fields) => { try { context.log?.write(level, event, fields); } catch {} };
+  const usage = usageReader(claude, { log });
+  log("info", "provider.created");
   let known = [];
   return {
     id: "claude-tmux", family: "claude", transport: "tmux",
@@ -521,11 +557,11 @@ function create() {
     browsers: async (root, pick) => root === void 0 ? void 0 : claude.readBrowsers(root, pick),
     correct: async () => ({ ok: false, error: "Claude Code correction is not available." }),
     delete: (root, id) => claude.deleteClaude(root, id),
-    dispose: () => { void usage.dispose(); },
+    dispose: () => { log("info", "provider.disposed"); void usage.dispose(); },
     hold: (options, hear, left) => holdTmux(claude, options, (heard) => {
       for (const signal of heard.signals) if (signal.kind === "plan") usage.heard(signal.plan);
       hear(heard);
-    }, left)
+    }, left, (delivery) => usage.sent(delivery), log)
   };
 }
 export { create, holdTmux, planNow, terminalScreen, usageReader, usageScreen };

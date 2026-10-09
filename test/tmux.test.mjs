@@ -54,12 +54,15 @@ test('counts a passed reset as an empty window without asking again', () => {
   assert.deepEqual(planNow(plan, resetsAt + 1), { fiveHour: { part: 0, resetsAt: resetsAt + 5 * 3600000 }, sevenDay: plan.sevenDay })
 })
 
-test('asks /usage through tmux at most once per interval and remembers what conversations say', { skip: !available, timeout: 50000 }, async () => {
+test('refreshes /usage only after sent messages and the cooldown, sharing concurrent checks', { skip: !available, timeout: 50000 }, async (t) => {
   const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-usage-test-')))
   const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
   await chmod(binary, 0o755)
   const log = join(folder, 'undefined.log')
-  const usage = usageReader({ claudeCommand: () => binary, OFF_PLAN: [], planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder, CLAUDE_TEST_TRUST: '1' }) }, { name: `usage-${randomUUID().slice(0, 8)}`, folder: join(folder, 'usage'), every: () => 3600000 })
+  let now = new Date(2026, 9, 9, 9, 0).getTime()
+  t.mock.method(Date, 'now', () => now)
+  const events = []
+  const usage = usageReader({ claudeCommand: () => binary, OFF_PLAN: [], planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder, CLAUDE_TEST_TRUST: '1' }) }, { name: `usage-${randomUUID().slice(0, 8)}`, folder: join(folder, 'usage'), every: () => 3600000, log: (level, event, fields) => events.push({ level, event, fields }) })
   const asked = async () => (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line)).filter((one) => one.prompt === '/usage').length
   try {
     const first = await usage.plan()
@@ -69,7 +72,78 @@ test('asks /usage through tmux at most once per interval and remembers what conv
     usage.heard({ fiveHour: { part: 0.3, resetsAt: first.fiveHour.resetsAt } })
     assert.equal((await usage.plan()).fiveHour.part, 0.3)
     assert.equal(await asked(), 1)
+
+    now += 3600001
+    assert.equal((await usage.plan()).fiveHour.part, 0.3)
+    assert.equal(await asked(), 1, 'elapsed cooldown without messages must not refresh')
+    usage.sent()
+    const refresh = usage.plan()
+    usage.sent()
+    const concurrent = usage.plan()
+    const refreshed = await refresh
+    assert.deepEqual(await concurrent, refreshed)
+    assert.equal(refreshed.fiveHour.part, 0.25)
+    assert.equal(await asked(), 2)
+    await usage.plan()
+    assert.equal(await asked(), 2, 'a message does not bypass the cooldown')
+
+    now += 3600001
+    await usage.plan()
+    assert.equal(await asked(), 3, 'a message sent during the previous check is retained')
+    now += 3600001
+    await usage.plan()
+    assert.equal(await asked(), 3, 'a completed check consumes only its preceding messages')
+    usage.heard({ fiveHour: { part: 0.4, resetsAt: now + 10000 } })
+    assert.equal((await usage.plan()).fiveHour.part, 0.4)
+    assert.equal(await asked(), 3, 'transcript limit events do not count as messages')
+    now += 10001
+    assert.equal((await usage.plan()).fiveHour.part, 0)
+    assert.equal(await asked(), 3, 'cached resets do not cause checks')
+    assert.equal(events.filter((one) => one.event === 'usage.command.sent').length, await asked())
+    assert.deepEqual(events.filter((one) => one.event === 'usage.check.started').map((one) => one.fields.messagesSinceCheck), [0, 1, 1])
+    assert.deepEqual(events.filter((one) => one.event === 'usage.command.sent').map((one) => one.fields.checkId), [1, 2, 3])
+    assert.equal(events.filter((one) => one.event === 'usage.check.completed').length, 3)
+    for (const reason of ['no-new-messages', 'cooldown', 'in-flight']) assert(events.some((one) => one.event === 'usage.check.skipped' && one.fields.reason === reason), reason)
+    assert(events.filter((one) => one.event === 'usage.check.completed').every((one) => one.fields.nextCheckAt > now - 4 * 3600000))
   } finally {
+    await usage.dispose()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+test('failed checks wait for new messages and failed sends do not trigger retries', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'claude-usage-failure-'))
+  const log = join(folder, 'tmux.log')
+  const binary = join(folder, 'tmux')
+  await writeFile(binary, `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(log)}, process.argv[2] + '\\n');\nprocess.exit(1);\n`, { mode: 0o755 })
+  const runtime = {
+    claudeCommand: () => 'unused', OFF_PLAN: [],
+    planOnly: () => ({ ...process.env, PATH: folder }),
+    claudeState: () => ({}), claudeFile: async () => undefined,
+  }
+  const logs = []
+  const usage = usageReader(runtime, { folder, every: () => 0, log: (level, event, fields) => logs.push({ level, event, fields }) })
+  const events = []
+  const driver = holdTmux(runtime, { id: randomUUID(), root: folder, mode: 'manual' }, (event) => events.push(event), () => {}, () => usage.sent())
+  const attempts = async () => (await readFile(log, 'utf8')).split('\n').filter((line) => line === 'has-session').length
+  try {
+    assert.equal(await usage.plan(), undefined)
+    assert.equal(await usage.plan(), undefined)
+    assert.equal(await attempts(), 1)
+    driver.send('failed startup')
+    await until(() => events.flatMap((event) => event.signals).some((signal) => signal.kind === 'ended' && signal.how === 'failed'))
+    assert.equal(await usage.plan(), undefined)
+    assert.equal(await attempts(), 1, 'failed submission must not schedule a check')
+    usage.sent()
+    assert.equal(await usage.plan(), undefined)
+    assert.equal(await attempts(), 2, 'a new message permits another attempt')
+    await usage.plan()
+    assert.equal(await attempts(), 2)
+    assert.equal(logs.filter((one) => one.event === 'usage.check.failed').length, 2)
+    assert.equal(logs.filter((one) => one.event === 'usage.command.sent').length, 0)
+    assert.equal(JSON.stringify(logs).includes('failed startup'), false)
+  } finally {
+    await driver.end()
     await usage.dispose()
     await rm(folder, { recursive: true, force: true })
   }
@@ -98,20 +172,24 @@ test('injects text and images into active work without interruption', { skip: !a
     readClaude: () => ({ items: [], gone: [], signals: [] }),
     claudeFile: async () => await exists(file) ? file : undefined,
   }
-  const driver = holdTmux(host, { id, root: folder, resume: false, mode: 'manual' }, (event) => events.push(event), () => {})
+  let sent = 0
+  const driver = holdTmux(host, { id, root: folder, resume: false, mode: 'manual' }, (event) => events.push(event), () => {}, () => { sent += 1 })
   const signals = () => events.flatMap((event) => event.signals)
   const logs = async () => (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
   try {
     await assert.rejects(driver.inject('idle'), /no longer working/)
+    assert.equal(sent, 0)
     driver.send('hold')
     await until(() => exists(log))
     await until(async () => (await logs()).some((entry) => entry.prompt === 'hold'))
     await delay(600)
+    assert.equal(sent, 1, 'ordinary submission counts after Enter')
     const begun = signals().filter((entry) => entry.kind === 'begun').length
     const text = "only this file\n'quoted' $(literal)"
     const delivery = driver.inject(text, [{ media: 'image/png', data: Buffer.from('image bytes').toString('base64') }], ['command output'])
     await assert.rejects(driver.inject('duplicate'), /question/)
     await delivery
+    assert.equal(sent, 2, 'only the accepted injection counts')
     await until(async () => (await logs()).some((entry) => entry.injected))
     const accepted = (await logs()).find((entry) => entry.injected).injected
     assert(accepted.startsWith('command output\n\n' + text + '\n\nImage attachment: '), accepted)
@@ -133,6 +211,7 @@ test('injects text and images into active work without interruption', { skip: !a
     assert.equal((await logs()).some((entry) => entry.choice), false)
     driver.answer(ask.ask, 'No')
     await until(() => signals().filter((entry) => entry.kind === 'ended').length === 2)
+    assert.equal(sent, 3, 'question answers and rejected injections do not count')
   } finally {
     await driver.end()
     await rm(folder, { recursive: true, force: true })
