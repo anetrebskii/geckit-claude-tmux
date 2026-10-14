@@ -53,7 +53,9 @@ function terminalScreen(text) {
   const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line))
   const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*\d+[.)]/.test(line))
   const bordered = prompt > 0 && /^\s*[─━-]{3}/.test(lines[prompt - 1]) && /^\s*[─━-]{3}/.test(lines[prompt + 1] ?? '')
-  return { kind: busy ? 'working' : bordered ? 'idle' : 'unknown', trust, trustFocus }
+  const blockedAt = lines.slice(0, prompt).findLastIndex((line) => /^\s*[●•]?\s*UserPromptSubmit operation blocked by hook:\s*$/.test(line))
+  const blocked = bordered && blockedAt !== -1 ? lines.slice(blockedAt, prompt - 1).join('\n').replace(/^\s*[●•]\s*/, '').split('\n\nOriginal prompt:')[0].trim() : undefined
+  return { kind: busy ? 'working' : bordered ? 'idle' : 'unknown', trust, trustFocus, ...blocked === undefined ? {} : { blocked } }
 }
 
 function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {}) {
@@ -79,6 +81,8 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   let stopping = false;
   let activity = false;
   let failure = "";
+  let blocked = false;
+  let previousBlock;
   let idle = 0;
   let counter = 0;
   let pending;
@@ -144,6 +148,8 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
       }
       if (type !== "assistant" && type !== "user" && type !== "system" && type !== "rate_limit_event") continue;
       const parsed = readClaude(state, type === "user" ? { ...entry, tool_use_result: entry["toolUseResult"] } : entry);
+      const rejection = parsed.signals.find((signal) => signal.kind === "ended" && signal.how === "blocked") ?? (typeof state.hookBlocked === "string" ? { text: state.hookBlocked } : void 0);
+      if (rejection !== void 0) { failure = rejection.text ?? "Blocked by hook."; blocked = true; activity = true; }
       const model = type === "assistant" ? string(object(entry["message"])["model"]) : "";
       if (type === "assistant" && parsed.items.length > 0) activity = true;
       if (!turn && parsed.items.some((item) => item.kind === "theirs")) {
@@ -203,6 +209,11 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
     const text = await tmux(["capture-pane", "-p", "-t", name]);
     if (ended) return;
     const screen = terminalScreen(text);
+    if (turn && screen.kind === "idle" && screen.blocked !== void 0 && screen.blocked !== previousBlock) {
+      failure = screen.blocked;
+      blocked = true;
+      activity = true;
+    }
     if (screen.trust && !trustHandled) {
       await confirmTrust(screen);
       return;
@@ -225,7 +236,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
         if (!await alive()) throw new Error("Claude Code exited.");
         turn = false;
         await clearImages();
-        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : failure === "" ? "done" : "failed", ...failure === "" ? {} : { text: failure } }]);
+        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : blocked ? "blocked" : failure === "" ? "done" : "failed", ...failure === "" ? {} : { text: failure } }]);
         stopping = false;
         activity = false;
         idle = 0;
@@ -350,12 +361,15 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
       stopping = false;
       activity = false;
       failure = "";
+      blocked = false;
+      state.hookBlocked = void 0;
       idle = 0;
       const sending = imagesIn(images).then(async (paths) => {
         const prompt = [...before, text, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
         if (!running && starting === void 0) starting = start();
         await starting;
         await waitForPrompt();
+        previousBlock = terminalScreen(await tmux(["capture-pane", "-p", "-t", name])).blocked;
         emit([], [], [{ kind: "doing", what: "sending to Claude Code" }]);
         await keys(prompt);
         sent("send");

@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
+import { claudeState, readClaude } from '../src/claude-runtime.mjs'
 import { create, holdTmux, planNow, terminalScreen, usageReader, usageScreen } from '../index.mjs'
 
 const available = (() => {
@@ -21,6 +22,41 @@ const until = async (condition) => {
   throw new Error('Timed out waiting for Claude Code.')
 }
 const idle = '────────────────────\n❯\u00a0Try "ask anything"\n────────────────────\n  custom status line\n'
+test('recognizes a prompt-hook block and keeps its diagnostic text', () => {
+  const screen = terminalScreen('● UserPromptSubmit operation blocked by hook:\n[vpn-guard]: lookup timed out\nVPN Guard: request blocked.\n\nOriginal prompt: test\n\n' + idle)
+  assert.equal(screen.kind, 'idle')
+  assert.equal(screen.blocked, 'UserPromptSubmit operation blocked by hook:\n[vpn-guard]: lookup timed out\nVPN Guard: request blocked.')
+  assert.equal(terminalScreen('● Stop hook error: Failed with non-blocking status code\n' + idle).blocked, undefined)
+})
+
+test('settles hook rejection without assistant activity and clears it on the next send', { skip: !available, timeout: 30000 }, async () => {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-hook-test-')))
+  const id = randomUUID()
+  const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
+  await chmod(binary, 0o755)
+  const events = []
+  const driver = holdTmux({ claudeCommand: () => binary, OFF_PLAN: [], planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder }), claudeState, claudeFile: async () => { const file = join(folder, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'), id + '.jsonl'); return stat(file).then(() => file, () => undefined) }, readClaude }, { id, root: folder, mode: 'manual' }, (event) => events.push(event), () => {})
+  const ended = () => events.flatMap((event) => event.signals).filter((signal) => signal.kind === 'ended')
+  try {
+    driver.send('hook-blocked')
+    await until(() => ended().length === 1)
+    assert.equal(ended()[0].how, 'blocked')
+    assert(ended()[0].text.includes('VPN Guard: public IP lookup failed; request blocked.'))
+    assert(!ended()[0].text.includes('Original prompt:'))
+    driver.send('hook-stopped')
+    await until(() => ended().length === 2)
+    assert.equal(ended()[1].how, 'blocked')
+    assert.equal(ended()[1].text, 'Operation stopped by hook: Connect VPN.')
+    driver.send('retry accepted')
+    await until(() => ended().length === 3)
+    assert.equal(ended()[2].how, 'done')
+    assert.equal(ended()[2].text, undefined)
+  } finally {
+    await driver.end()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
 test('recognizes native states without interpreting reply text as a selection', () => {
   assert.equal(terminalScreen(idle).kind, 'idle')
   assert.equal(terminalScreen('✶ Working…\n' + idle).kind, 'working')

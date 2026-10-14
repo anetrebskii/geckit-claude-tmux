@@ -51,6 +51,14 @@ const say = (prompt) => {
     working(); return
   }
   if (prompt === 'quiet') { idle(); return }
+  if (prompt === 'hook-stopped') {
+    write({ type: 'user', uuid: 'hook-stopped', message: { content: 'Operation stopped by hook: Connect VPN.' } })
+    idle(); return
+  }
+  if (prompt === 'hook-blocked') {
+    paint('Claude Code\n● UserPromptSubmit operation blocked by hook:\n[vpn-guard]: VPN Guard: public IP lookup failed; request blocked.\n\nOriginal prompt: hook-blocked\n\n────────────────────\n❯ hook-blocked\n────────────────────\n  auto mode on\n')
+    return
+  }
   if (prompt === '/local') {
     write({ type: 'system', subtype: 'local_command', isMeta: true, commandRun: '/local', content: 'Local result' })
     idle(); return

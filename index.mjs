@@ -166,6 +166,23 @@ var modelVersion = (id) => {
   const match = /^(?:claude-[a-z]+-|gpt-)(\d+)(?:[-.](\d+))?(?:-|\[|$)/.exec(id);
   return match === null ? void 0 : [match[1], match[2]].filter((part) => part !== void 0).join(".");
 };
+var jsonObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+function elicitationSummary(answer) {
+  let parsed;
+  try {
+    parsed = JSON.parse(answer);
+  } catch {
+    return "Cancelled";
+  }
+  switch (jsonObject(parsed)?.["action"]) {
+    case "accept":
+      return jsonObject(parsed)?.["remember"] === true ? "Accepted for this conversation" : "Accepted";
+    case "decline":
+      return "Declined";
+    default:
+      return "Cancelled";
+  }
+}
 var sentence = (doing) => doing.charAt(0).toUpperCase() + doing.slice(1);
 function shown(root, path) {
   const inside = within(root, path);
@@ -352,6 +369,8 @@ function cardFor(wanted, root) {
       return { kind: "permission", title: "Wants to open a web page", detail: wanted.url };
     case "question":
       return { kind: "question", title: wanted.question, choices: wanted.choices };
+    case "elicitation":
+      return { kind: "elicitation", title: wanted.message, where: `Requested by ${wanted.serverName}`, elicitation: wanted };
     case "start":
       return { kind: "start", title: "Wants to start making these changes", detail: wanted.plan };
     case "other":
@@ -372,11 +391,14 @@ function subject(wanted, root) {
       return "making changes";
     case "question":
       return wanted.question;
+    case "elicitation":
+      return wanted.message;
     case "other":
       return wanted.tool;
   }
 }
 function answeredLine(wanted, answer, root) {
+  if (wanted.kind === "elicitation") return `${elicitationSummary(answer)}: ${wanted.message}`;
   if (wanted.kind === "question") return `Answered: ${answer}`;
   const what = subject(wanted, root);
   if (answer === "once") return `Allowed: ${what}`;
@@ -398,6 +420,7 @@ function claudeState(root) {
     thought: false,
     interrupted: false,
     synthetic: void 0,
+    hookBlocked: void 0,
     limit: void 0,
     summarised: void 0,
     backgrounded: /* @__PURE__ */ new Set(),
@@ -435,6 +458,8 @@ var NOT_SAID = /^\s*(<(command-|local-command|system-reminder|bash-|task-notific
 var INTERRUPTED = /^\[Request interrupted by user/;
 var SUMMARY_HEAD = /^This session is being continued[^\n]*\n+Summary:\n/;
 var HELD = /^Stop hook feedback:\n\[([\s\S]*?)\]: ([\s\S]*)$/;
+var HOOK_BLOCKED = "Blocked by hook.";
+var hookBlock = (text2) => /^(UserPromptSubmit operation blocked by hook:|Operation stopped by hook(?::|$))/.test(text2) ? text2.split("\n\nOriginal prompt:")[0]?.trim() : void 0;
 var TASK_NOTIFICATION = /^\s*<task-notification>([\s\S]*)<\/task-notification>\s*$/;
 var tagged = (body, tag2) => new RegExp(`<${tag2}>([\\s\\S]*?)</${tag2}>`).exec(body)?.[1]?.trim() ?? "";
 function taskNote(id, status, summary) {
@@ -644,7 +669,22 @@ function readClaude(state, message) {
   }
   if (type === "system") {
     const subtype = string2(message["subtype"]);
-    if (subtype === "init") {
+    const blocked = hookBlock(string2(message["content"]));
+    if (blocked !== void 0) {
+      state.hookBlocked = blocked;
+      out.signals.push({ kind: "ended", how: "blocked", text: blocked });
+    } else if (subtype === "hook_response" && string2(message["hook_event"]) === "UserPromptSubmit") {
+      let decision = {};
+      try {
+        decision = object(JSON.parse(string2(message["stdout"])));
+      } catch {
+      }
+      if (message["exit_code"] === 2 || decision["decision"] === "block" || decision["continue"] === false) {
+        state.hookBlocked = `UserPromptSubmit operation blocked by hook:
+${string2(message["hook_name"])}
+${string2(decision["stopReason"]) || string2(decision["reason"]) || string2(message["stderr"]) || string2(message["output"])}`.trim();
+      }
+    } else if (subtype === "init") {
       const model = string2(message["model"]);
       const mode = string2(message["permissionMode"]);
       out.signals.push({
@@ -764,6 +804,11 @@ function readClaude(state, message) {
     if (toolResults(state, message, out)) return out;
     const content2 = object(message["message"])["content"];
     const said = typeof content2 === "string" ? content2 : resultText(content2);
+    const blocked = hookBlock(said);
+    if (blocked !== void 0) {
+      state.hookBlocked = blocked;
+      return out;
+    }
     if (state.summarised !== void 0 && (message["isCompactSummary"] === true || message["isSynthetic"] === true)) {
       out.items.push({ kind: "note", id: state.summarised, note: "summarised", text: SUMMARISED, detail: said.replace(SUMMARY_HEAD, "").trim() });
       state.summarised = void 0;
@@ -817,15 +862,20 @@ function readClaude(state, message) {
       state.open = void 0;
     }
     const failed = message["is_error"] === true;
-    const said = state.synthetic ?? string2(message["result"]);
+    const said = state.synthetic ?? (string2(message["result"]) || list(message["errors"]).map(string2).filter(Boolean).join("\n"));
+    const blocked = state.hookBlocked ?? hookBlock(said);
     const stopped = state.interrupted;
     const limit = state.limit;
     state.interrupted = false;
     state.synthetic = void 0;
+    state.hookBlocked = void 0;
     state.limit = void 0;
     if (stopped) {
       flush(state, out);
       out.signals.push({ kind: "ended", how: "stopped" });
+    } else if (blocked !== void 0) {
+      flush(state, out);
+      out.signals.push({ kind: "ended", how: "blocked", text: blocked });
     } else if (!failed && string2(message["subtype"]) === "success") {
       flush(state, out);
       out.signals.push({ kind: "ended", how: "done" });
@@ -954,9 +1004,24 @@ function replayClaude(root, entries, quietFor) {
   for (const entry of entries) {
     const type = string2(entry["type"]);
     if (entry["isSidechain"] === true || entry["isMeta"] === true) continue;
+    const content2 = type === "system" ? string2(entry["content"]) : type === "user" ? resultText(object(entry["message"])["content"]) : "";
+    const blocked = hookBlock(content2);
+    if (blocked !== void 0) {
+      const id = string2(entry["uuid"]);
+      const marker = "\n\nOriginal prompt: ";
+      const at2 = content2.indexOf(marker);
+      if (at2 !== -1) items.set(`${id}:prompt`, { kind: "mine", id: `${id}:prompt`, text: content2.slice(at2 + marker.length), unsent: true, ...stamped(entry) });
+      else {
+        const mine = [...items.values()].findLast((item) => item.kind === "mine");
+        if (mine?.kind === "mine") items.set(mine.id, { ...mine, unsent: true });
+      }
+      items.set(`hook:${id}`, { kind: "note", id: `hook:${id}`, note: "failed", text: HOOK_BLOCKED, detail: blocked });
+      open32 = false;
+      continue;
+    }
     if (type === "user") {
-      const content2 = object(entry["message"])["content"];
-      const typed2 = typeof content2 === "string" || !list(content2).some((block) => string2(object(block)["type"]) === "tool_result");
+      const content22 = object(entry["message"])["content"];
+      const typed2 = typeof content22 === "string" || !list(content22).some((block) => string2(object(block)["type"]) === "tool_result");
       if (!typed2) {
         take(readClaude(state, { ...entry, tool_use_result: entry["toolUseResult"] }));
         continue;
@@ -966,7 +1031,7 @@ function replayClaude(root, entries, quietFor) {
         continue;
       }
       const words = [];
-      for (const [index, text2] of textsOf(content2).entries()) {
+      for (const [index, text2] of textsOf(content22).entries()) {
         const told = TASK_NOTIFICATION.exec(text2);
         if (told !== null) {
           const body = told[1] ?? "";
@@ -996,7 +1061,7 @@ function replayClaude(root, entries, quietFor) {
       const written = words.join("\n");
       const command = tagged(written, "command-name");
       const said = command.startsWith("/") ? `${command} ${tagged(written, "command-args")}`.trim() : written;
-      const pictures = picturesIn(content2, budget);
+      const pictures = picturesIn(content22, budget);
       if (NOT_SAID.test(said)) continue;
       if (said.trim() === "" && pictures.length === 0) continue;
       const out2 = empty();
@@ -1859,7 +1924,9 @@ function terminalScreen(text2) {
   const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line));
   const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*\d+[.)]/.test(line));
   const bordered = prompt > 0 && /^\s*[─━-]{3}/.test(lines[prompt - 1]) && /^\s*[─━-]{3}/.test(lines[prompt + 1] ?? "");
-  return { kind: busy ? "working" : bordered ? "idle" : "unknown", trust, trustFocus };
+  const blockedAt = lines.slice(0, prompt).findLastIndex((line) => /^\s*[●•]?\s*UserPromptSubmit operation blocked by hook:\s*$/.test(line));
+  const blocked = bordered && blockedAt !== -1 ? lines.slice(blockedAt, prompt - 1).join("\n").replace(/^\s*[●•]\s*/, "").split("\n\nOriginal prompt:")[0].trim() : void 0;
+  return { kind: busy ? "working" : bordered ? "idle" : "unknown", trust, trustFocus, ...blocked === void 0 ? {} : { blocked } };
 }
 function holdTmux(runtime, options, hear, left, sent = () => {
 }, log = () => {
@@ -1886,6 +1953,8 @@ function holdTmux(runtime, options, hear, left, sent = () => {
   let stopping = false;
   let activity = false;
   let failure = "";
+  let blocked = false;
+  let previousBlock;
   let idle = 0;
   let counter = 0;
   let pending;
@@ -1951,6 +2020,12 @@ function holdTmux(runtime, options, hear, left, sent = () => {
       }
       if (type !== "assistant" && type !== "user" && type !== "system" && type !== "rate_limit_event") continue;
       const parsed = readClaude2(state, type === "user" ? { ...entry, tool_use_result: entry["toolUseResult"] } : entry);
+      const rejection = parsed.signals.find((signal) => signal.kind === "ended" && signal.how === "blocked") ?? (typeof state.hookBlocked === "string" ? { text: state.hookBlocked } : void 0);
+      if (rejection !== void 0) {
+        failure = rejection.text ?? "Blocked by hook.";
+        blocked = true;
+        activity = true;
+      }
       const model = type === "assistant" ? string8(object4(entry["message"])["model"]) : "";
       if (type === "assistant" && parsed.items.length > 0) activity = true;
       if (!turn && parsed.items.some((item) => item.kind === "theirs")) {
@@ -2009,6 +2084,11 @@ function holdTmux(runtime, options, hear, left, sent = () => {
     const text2 = await tmux(["capture-pane", "-p", "-t", name]);
     if (ended2) return;
     const screen = terminalScreen(text2);
+    if (turn && screen.kind === "idle" && screen.blocked !== void 0 && screen.blocked !== previousBlock) {
+      failure = screen.blocked;
+      blocked = true;
+      activity = true;
+    }
     if (screen.trust && !trustHandled) {
       await confirmTrust(screen);
       return;
@@ -2037,7 +2117,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {
         if (!await alive()) throw new Error("Claude Code exited.");
         turn = false;
         await clearImages();
-        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : failure === "" ? "done" : "failed", ...failure === "" ? {} : { text: failure } }]);
+        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : blocked ? "blocked" : failure === "" ? "done" : "failed", ...failure === "" ? {} : { text: failure } }]);
         stopping = false;
         activity = false;
         idle = 0;
@@ -2173,12 +2253,15 @@ function holdTmux(runtime, options, hear, left, sent = () => {
       stopping = false;
       activity = false;
       failure = "";
+      blocked = false;
+      state.hookBlocked = void 0;
       idle = 0;
       const sending = imagesIn(images).then(async (paths) => {
         const prompt = [...before, text2, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
         if (!running && starting === void 0) starting = start();
         await starting;
         await waitForPrompt();
+        previousBlock = terminalScreen(await tmux(["capture-pane", "-p", "-t", name])).blocked;
         emit([], [], [{ kind: "doing", what: "sending to Claude Code" }]);
         await keys(prompt);
         sent("send");
