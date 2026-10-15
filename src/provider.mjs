@@ -27,7 +27,7 @@ function terminalScreen(text) {
   const lines = plain(text).split('\n').map((line) => line.trimEnd())
   const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join('\n')) && /Enter to confirm/i.test(text)
   const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1
-  const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*\d+[.)]\s+/.test(line))
+  const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*(?:\d+[.)]\s+|(?:Submit|Next)\s*$)/.test(line))
   const review = lines.some((line) => line.trim() === 'Review your answers') && /(?:^|\n)\s*Ready to submit your answers\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Submit answers\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+Cancel\s*$/.test(lines.join('\n'))
   if (selected !== -1 && (review || /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join('\n')))) {
     const choice = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+)$/
@@ -40,15 +40,25 @@ function terminalScreen(text) {
       if (groups.length === 0) groups.push([])
       groups.at(-1).push(option)
     }
-    const group = groups.find((options) => options.some((option) => option.at === selected)) ?? []
+    const group = groups.find((options) => options.some((option) => option.at === selected)) ?? groups.findLast((options) => options.some((option) => option.at < selected && /^\[[ ✓✔xX]\]\s/.test(option.label))) ?? []
+    const multiple = group.some((option) => /^\[[ ✓✔xX]\]\s/.test(option.label))
+    if (multiple) {
+      const submit = lines.findIndex((line, at) => at > (group.findLast((option) => /^\[[ ✓✔xX]\]\s/.test(option.label))?.at ?? selected) && /^\s*(?:[❯›>]\s*)?(?:Submit|Next)\s*$/.test(line))
+      if (submit !== -1) {
+        const input = group.findLast((option) => option.at < submit)
+        if (input !== undefined) input.input = true
+        group.push({ at: submit, label: lines[submit].replace(/^\s*[❯›>]\s*/, '').trim() })
+        group.sort((one, other) => one.at - other.at)
+      }
+    }
     const first = group[0]?.at ?? selected
     const border = lines.slice(0, first).findLastIndex((line) => /^\s*[─━-]{3}/.test(line))
     const above = lines.slice(border + 1, first).filter((line) => line.trim() !== '')
     const title = above.slice(-6).map((line) => line.trim()).join('\n') || 'Choose an option'
-    const options = group.map(({ number, label }) => ({ number, label }))
+    const options = group.map(({ number, label, input }) => ({ number, label, ...input ? { input } : {} }))
     const focus = group.findIndex((option) => option.at === selected)
     const signature = JSON.stringify({ title, options })
-    return { kind: 'question', title, options, focus, signature, trust, trustFocus }
+    return { kind: 'question', title, options, focus, signature, trust, trustFocus, multiple }
   }
   const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line))
   const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*\d+[.)]/.test(line))
@@ -296,7 +306,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
     }
     throw new Error("Claude Code did not become ready for input.");
   };
-  const keys = async (text, ready) => {
+  const keys = async (text, ready, submit = true) => {
     for (const character of text) {
       await ready?.();
       if (character === "\n") {
@@ -308,7 +318,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
       await delay(typingDelay());
     }
     await ready?.();
-    await tmux(["send-keys", "-t", name, "Enter"]);
+    if (submit) await tmux(["send-keys", "-t", name, "Enter"]);
   };
   const close = async () => {
     if (ended) return;
@@ -394,7 +404,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
         let index = screen.options.findIndex((option) => option.label === answer);
         let typed;
         if (index === -1) {
-          index = screen.options.findIndex((option) => /^(?:Type something|Other\b)/i.test(option.label));
+          index = screen.options.findIndex((option) => option.input || /^(?:Type something|Other\b)/i.test(option.label));
           typed = answer;
         }
         if (index === -1) {
@@ -404,8 +414,18 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
         }
         const distance = index - screen.focus;
         if (distance !== 0) await tmux(["send-keys", "-t", name, ...Array.from({ length: Math.abs(distance) }, () => distance < 0 ? "Up" : "Down")]);
-        await tmux(["send-keys", "-t", name, "Enter"]);
-        if (typed !== void 0) await keys(string(typed));
+        if (distance !== 0) await delay(100);
+        if (typed !== void 0) {
+          await tmux(["send-keys", "-t", name, "C-u"]);
+          await keys(string(typed), void 0, !screen.multiple);
+          if (screen.multiple) {
+            await tmux(["send-keys", "-t", name, "Down"]);
+            await delay(100);
+            await tmux(["send-keys", "-t", name, "Enter"]);
+          }
+        } else if (!screen.options[index].input && !/^(?:Type something|Other\b)/i.test(screen.options[index].label)) {
+          await tmux(["send-keys", "-t", name, "Enter"]);
+        }
         pending = void 0;
         idle = 0;
       })().catch((error) => { emit([], [], [{ kind: "ended", how: "failed", text: error.message }]); void close(); }).finally(() => { answering = false; });

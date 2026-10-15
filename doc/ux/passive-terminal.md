@@ -195,3 +195,19 @@ The real Background component and styles were reviewed in an isolated Chrome har
 When a UserPromptSubmit hook rejects a prompt, the driver reports Blocked by hook with Claude's diagnostic output. The host retains the rejected message and attachments and offers Try again. A terminal warning or JSON continuation rejection counts as activity even when no assistant response is written, so the turn settles through the existing two idle observations. Ordinary non-blocking Stop-hook errors do not end work. The next send clears the rejection; an old terminal warning cannot turn a later successful response into failure. Saved warnings replay as failure notes. This requires the matching GeckIt host change that handles the blocked end signal.
 
 Verified with isolated fake-Claude terminal and JSON-hook rejection followed by successful work. Shared Chat was reviewed in Chrome in light/dark at 1352x676, 390x844 and 320x844; expanded reason, wrapping, scrolling, keyboard retry and preserved unrelated draft/photo passed. Provider calls were fixtures. The installed provider was not replaced or restarted. The full suite's pre-existing trust-navigation assertion also fails on unchanged HEAD.
+
+### Native multiple-choice answers - 2026-10-15
+
+The existing desktop and phone question card mirrors native checkbox labels and includes the native unnumbered "Submit" or "Next" action in its actual navigation position. Selecting a checkbox keeps the question open with its updated check mark; the person may toggle more choices and then press Submit/Next. This continues to Claude's existing answer review, where "Submit answers" remains explicit. Typing in "Something else" and pressing Enter fills the native inline input and advances to review/next question with the entered text selected. A "Type something" choice alone keeps the current card available for typing.
+
+| From | Event | To | Visible result |
+| --- | --- | --- | --- |
+| Waiting | User clicks a checkbox | Waiting | Updated native check mark and Submit/Next action |
+| Waiting | User enters custom text | Review/next question | Entered text retained alongside selected choices |
+| Waiting | User presses Submit/Next | Review/next question | Claude's current review or next question |
+| Review | User presses Submit answers | Working | Review resolves and Claude continues |
+| Waiting/review | User presses Stop | Idle | Existing Stopped state |
+
+Stale cards still recapture the native screen before sending input. Repeated clicks during answer delivery are ignored. Empty custom input is not submitted by the existing card. Single-choice menus and permission menus retain their native Enter behavior. Polling and navigation delays stay silent; no renderer layout, tokens or components change. Automatically accepting the final review is deliberately excluded because it belongs to the person's explicit choice. Acceptance requires real-tmux regression tests for toggles, Submit/Next focus and text, plus checking the installed native question without altering its answers.
+
+Verification: all 28 provider tests passed with fake Claude on a private real-tmux server. A live read-only capture of Claude 2.1.300's blocked Schedule question confirms the checkbox and unnumbered Submit layout. The actual GeckIt Transcript component was exercised in Chrome at desktop width and 390-pixel content width, light and dark: checkbox selection, explicit Submit/review, custom input with Enter, final confirmation and keyboard focus passed against the isolated driver fixture. These checks do not verify model execution after a real account answer. Renderer and CSS are unchanged; the performance-review renderer checklist is outside this diff.

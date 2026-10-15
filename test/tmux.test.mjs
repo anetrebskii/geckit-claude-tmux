@@ -74,6 +74,37 @@ test('recognizes native states without interpreting reply text as a selection', 
   assert.deepEqual(native.options.map((one) => one.label), ['Red', 'Blue', 'Type something.', 'Chat about this'])
   assert.equal(terminalScreen('Quick safety check:\nIs this a project you created or one you trust?\nEnter to confirm').trust, true)
 })
+const checkboxQuestion = `Previous reply
+────────────────────
+← ☐ Schedule ✔ Submit →
+
+What kind of schedule options should be added?
+
+❯ 1. [ ] More intervals
+         Add more intervals.
+  2. [✓] Time of day
+  3. [ ] Working hours only
+  4. [ ] Type something
+     Submit
+────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+`
+test('includes native checkbox submit in navigation and recognizes its focus', () => {
+  const screen = terminalScreen(checkboxQuestion)
+  assert.equal(screen.kind, 'question')
+  assert.equal(screen.multiple, true)
+  assert.deepEqual(screen.options.map((one) => one.label), ['[ ] More intervals', '[✓] Time of day', '[ ] Working hours only', '[ ] Type something', 'Submit', 'Chat about this'])
+  assert.equal(screen.options[3].input, true)
+  const submitted = terminalScreen(checkboxQuestion.replace('❯ 1.', '  1.').replace('     Submit', '❯    Submit'))
+  assert.equal(submitted.kind, 'question')
+  assert.equal(submitted.focus, 4)
+  assert.equal(submitted.signature, screen.signature)
+  assert.equal(terminalScreen(checkboxQuestion.replace('     Submit', '     Next')).options[4].label, 'Next')
+  assert.equal(terminalScreen(checkboxQuestion.replace('[ ] Type something', '[✓] Custom answer')).options[3].input, true)
+})
+
 test('recognizes answer review without a navigation footer', async () => {
   const review = await readFile(new URL('./answer-review.txt', import.meta.url), 'utf8')
   const screen = terminalScreen(review)
@@ -436,6 +467,70 @@ test('sends through tmux, tails JSONL, and confirms native lifecycle and approva
     await until(() => closed)
     assert.equal(ended().at(-1).how, 'failed')
     assert.equal(ended().at(-1).text, 'Claude Code exited.')
+  } finally {
+    await driver.end()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+
+test('checkboxes toggle, submit explicitly, and accept native inline text through tmux', { skip: !available, timeout: 30000 }, async () => {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-checkbox-test-')))
+  const id = randomUUID()
+  const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
+  await chmod(binary, 0o755)
+  const events = []
+  const runtime = {
+    claudeCommand: () => binary, OFF_PLAN: [],
+    planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder }),
+    claudeState: () => ({}), claudeFile: async () => undefined,
+  }
+  const driver = holdTmux(runtime, { id, root: folder, mode: 'manual' }, (event) => events.push(event), () => {})
+  const signals = () => events.flatMap((event) => event.signals)
+  const asks = () => signals().filter((signal) => signal.kind === 'asks')
+  const ended = () => signals().filter((signal) => signal.kind === 'ended')
+  const logs = async () => (await readFile(join(folder, id + '.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+  const answer = async (choice) => {
+    const count = asks().length
+    driver.answer(asks().at(-1).ask, choice)
+    await until(() => asks().length > count)
+    return asks().at(-1)
+  }
+  try {
+    driver.send('checkbox')
+    await until(() => asks().length === 1)
+    assert(asks()[0].wanted.choices.includes('Submit'))
+    assert((await answer('[ ] More intervals')).wanted.choices.includes('[✓] More intervals'))
+    assert((await answer('[ ] Time of day')).wanted.choices.includes('[✓] Time of day'))
+    assert((await answer('[✓] More intervals')).wanted.choices.includes('[ ] More intervals'))
+    assert.equal((await logs()).some((line) => line.submitted), false)
+    await answer('Submit')
+    assert.deepEqual((await logs()).find((line) => line.submitted).submitted, ['Time of day'])
+    driver.answer(asks().at(-1).ask, 'Submit answers')
+    await until(() => ended().length === 1)
+
+    driver.send('checkbox-next')
+    const previous = asks().length
+    await until(() => asks().length > previous)
+    assert(asks().at(-1).wanted.choices.includes('Next'))
+    await answer('[ ] More intervals')
+    await answer('[ ] Type something')
+    assert.equal((await logs()).filter((line) => line.submitted).length, 1, 'focusing the input does not submit an empty answer')
+    const text = 'Every Monday at 9:00 — время'
+    await answer(text)
+    assert.deepEqual((await logs()).filter((line) => line.submitted).at(-1).submitted, ['More intervals', text])
+    assert.deepEqual(asks().at(-1).wanted.choices, ['Submit answers', 'Cancel'])
+    driver.answer(asks().at(-1).ask, 'Submit answers')
+    await until(() => ended().length === 2)
+
+    driver.send('question')
+    const count = asks().length
+    await until(() => asks().length > count)
+    driver.answer(asks().at(-1).ask, 'Single custom answer')
+    await until(() => ended().length === 3)
+    assert.equal(ended().at(-1).how, 'done')
+    assert.equal((await logs()).find((line) => line.typedAnswer).typedAnswer, 'Single custom answer')
+    assert.equal((await logs()).filter((line) => line.prompt).at(-1).prompt, 'question')
   } finally {
     await driver.end()
     await rm(folder, { recursive: true, force: true })

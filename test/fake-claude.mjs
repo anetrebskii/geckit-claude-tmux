@@ -29,7 +29,13 @@ const trustScreen = () => paint(`Quick safety check:\nIs this a project you crea
 const paint = (text) => process.stdout.write('\x1b[2J\x1b[H' + text)
 const idle = () => { busy = false; paint('Claude Code\n────────────────────\n❯\u00a0Try "ask anything"\n────────────────────\n  auto mode on\n') }
 const working = () => { busy = true; paint('Claude Code\n✶ Working…\n────────────────────\n❯\u00a0\n────────────────────\n') }
-const choices = () => paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review ? '' : '  Enter to select · Esc to cancel\n'}`)
+const choices = () => {
+  if (menu.multiple) {
+    paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i === 3 ? '   ' : `${i < 3 ? i + 1 : i}.`} ${i < 3 ? `[${menu.checked.has(i) ? '✓' : ' '}] ` : ''}${i === 2 && input ? input : label}`).join('\n')}\nEnter to select · ↑/↓ to navigate · Esc to cancel\n`)
+    return
+  }
+  paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review ? '' : '  Enter to select · Esc to cancel\n'}`)
+}
 const reply = (text) => {
   write({ type: 'assistant', uuid: 'reply-' + ++count, message: { model: 'claude-test', stop_reason: 'end_turn', content: [{ type: 'text', text }] } })
   idle()
@@ -72,6 +78,11 @@ const say = (prompt) => {
     return
   }
   if (prompt === 'unknown') { paint('Unrecognized terminal state\n'); return }
+  if (prompt === 'checkbox' || prompt === 'checkbox-next') {
+    menu = { title: '────────────────────\n← ☐ Schedule ✔ Submit →\n\nWhich schedule options?', options: ['More intervals', 'Time of day', 'Type something', prompt === 'checkbox-next' ? 'Next' : 'Submit', 'Chat about this'], multiple: true, checked: new Set() }
+    selection = 0
+    choices(); return
+  }
   if (prompt === 'review') {
     menu = { title: '────────────────────\n← ☒ Scope ☒ Files ✔ Submit →\n\nReview your answers\n\n ● Where should the demo run?\n   → Local demo (Recommended)\n ● May we edit both files?\n   → Yes, edit both\n\nReady to submit your answers?\n', options: ['Submit answers', 'Cancel'], review: true }
     selection = 0
@@ -110,19 +121,35 @@ process.stdin.on('data', (chunk) => {
     if (chunk[i] === '\x1b') { record({ escaped: true }); if (!busy && !menu && !trusting) idle(); continue }
     const c = chunk[i]
     if (c === '\x03') { clearTimeout(timer); queued.length = 0; menu = undefined; record({ stopped: true }); idle(); continue }
-    if (c === '\x15') { input = ''; record({ clearedInput: true }); continue }
+    if (c === '\x15') { input = ''; if (menu?.multiple) { menu.checked.delete(2); choices() } record({ clearedInput: true }); continue }
     if ((c === '\r' || c === '\n') && !pasting) {
       if (input.endsWith('\\')) { input = input.slice(0, -1) + '\n'; continue }
       if (trusting) { if (trustFocus !== 1) process.exit(1); trusting = false; record({ trusted: true }); idle(); continue }
       if (menu) {
         const choice = menu.options[selection]
         record({ choice })
+        if (menu.multiple) {
+          if (selection < 3) {
+            if (menu.checked.has(selection)) menu.checked.delete(selection)
+            else menu.checked.add(selection)
+            record({ checked: [...menu.checked] })
+            choices(); continue
+          }
+          record({ submitted: [...menu.checked].map((index) => index === 2 ? input : menu.options[index]) })
+          input = ''
+          menu = { title: 'Review your answers\nReady to submit your answers?', options: ['Submit answers', 'Cancel'], review: true }
+          selection = 0
+          choices(); continue
+        }
         menu = undefined
-        if (choice === 'Type something.') { typed = true; paint('Type your answer\n'); continue }
+        if (choice === 'Type something.') { record({ typedAnswer: input }); reply('typed: ' + input); input = ''; continue }
         reply('choice: ' + choice)
       } else if (typed) { typed = false; reply('typed: ' + input); input = '' }
       else { const prompt = input; input = ''; if (busy) { queued.push(prompt); record({ injected: prompt }) } else say(prompt) }
-    } else input += pasting && c === '\r' ? '\n' : c
+    } else {
+      input += pasting && c === '\r' ? '\n' : c
+      if (menu?.multiple && selection === 2) { menu.checked.add(2); choices() }
+    }
   }
 })
 setInterval(() => {
