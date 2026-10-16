@@ -211,3 +211,26 @@ The existing desktop and phone question card mirrors native checkbox labels and 
 Stale cards still recapture the native screen before sending input. Repeated clicks during answer delivery are ignored. Empty custom input is not submitted by the existing card. Single-choice menus and permission menus retain their native Enter behavior. Polling and navigation delays stay silent; no renderer layout, tokens or components change. Automatically accepting the final review is deliberately excluded because it belongs to the person's explicit choice. Acceptance requires real-tmux regression tests for toggles, Submit/Next focus and text, plus checking the installed native question without altering its answers.
 
 Verification: all 28 provider tests passed with fake Claude on a private real-tmux server. A live read-only capture of Claude 2.1.300's blocked Schedule question confirms the checkbox and unnumbered Submit layout. The actual GeckIt Transcript component was exercised in Chrome at desktop width and 390-pixel content width, light and dark: checkbox selection, explicit Submit/review, custom input with Enter, final confirmation and keyboard focus passed against the isolated driver fixture. These checks do not verify model execution after a real account answer. Renderer and CSS are unchanged; the performance-review renderer checklist is outside this diff.
+
+
+### Startup recovery - 2026-10-16
+
+The existing send flow automatically relaunches Claude once if its tmux pane exits before any message text is typed. The original message and attachments stay in the same delivery operation. A saved native transcript resumes with the same conversation ID; a new conversation without a transcript keeps its original session/fork arguments. Existing conversations requested with resume never silently become empty conversations. Startup and recovery remain under the existing working indicator, with no extra notification or layout.
+
+| From | Event | To | Visible result / action |
+| --- | --- | --- | --- |
+| Starting | Native pane exits before typing, automatically | Recovering | Existing working indicator; wait or Stop |
+| Recovering | Replacement reaches the prompt, automatically | Sending | Existing "sending to Claude Code" status; wait or Stop |
+| Recovering | Replacement exits, automatically | Failed | Existing failure card with native diagnostic; inspect and Try again |
+| Starting/recovering | User presses Stop | Stopped | Existing stopped state; user can send again |
+| Sending/working | Pane exits after typing begins, automatically | Failed | Existing failure and Try again; no automatic message replay |
+| Failed | User presses Try again | Starting | Existing retry workflow |
+
+Recovery is limited to one restart per send to avoid a permanent crash loop. There is no new delay; prompt readiness retains its existing 60-second bound per launch. A dead pane is retained long enough to capture its final terminal output, limited to the last 2,000 characters, then removed on recovery or closure. Error details appear only in the existing expandable diagnostic. Logs record recovery categories and session IDs, never terminal content.
+
+Hook blocks, API errors, live question menus, slow startup and failures after typing begins do not trigger automatic recovery. Missing history is never treated as an empty replacement conversation. Cancellation is checked during readiness and typing so a stopped delivery cannot relaunch or submit later. The poller leaves startup failure handling to the send operation, preventing competing close and restart decisions. Resolved completed turns and queued-message delivery retain their current behavior. No renderer files, styling or shared UI contract change.
+
+Requirements: reproduce startup exit with real tmux/fake Claude, recover the original message exactly once, bound repeated startup failures with a useful native diagnostic, resume saved history, honor cancellation, and verify submitted messages are never automatically replayed.
+
+
+Verification: all 33 provider tests passed on isolated real tmux sockets with fake Claude after the startup-recovery implementation. The regression cases cover transient startup exit, bounded repeated exit with retained stderr, a vanished idle pane resuming the same ID, Stop during startup, and no replay after submission. A separate native Claude 2.1.301 startup probe, without sending any prompt, reproduced the reported conversation's permanent error: "No conversation found with session ID: c19beefb-91e9-4791-81a5-39516161b3b7". Its native transcript is absent in the current configuration. Automatic restart cannot reconstruct missing conversation history; the provider retains resume semantics and reports the diagnostic. The installed library and active conversations were not replaced or restarted. No renderer files changed, so no visual redesign or renderer-performance review applies.

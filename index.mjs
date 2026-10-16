@@ -2136,6 +2136,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {
   };
   const catchUp = () => {
     reading = reading.then(async () => {
+      if (submitting) return;
       if (++polls % 4 === 0 && !await alive()) throw new Error("Claude Code exited.");
       await read2();
       await tasks.poll();
@@ -2148,10 +2149,10 @@ function holdTmux(runtime, options, hear, left, sent = () => {
     });
     return reading;
   };
-  const start = async () => {
-    if (ended2) return;
+  const start = async (recovering = false) => {
+    if (ended2 || stopping) return;
     const path = await claudeFile2(options.root, options.id);
-    if (path !== void 0) {
+    if (!recovering && path !== void 0) {
       offset = (await stat3(path)).size;
       if (offset > 0) {
         const lines = createInterface4({ input: createReadStream(path, { end: offset - 1 }), crlfDelay: Infinity });
@@ -2176,21 +2177,26 @@ function holdTmux(runtime, options, hear, left, sent = () => {
     const env = environment();
     const omitted = [...OFF_PLAN2, ...Object.keys(planOnly2()).filter((key) => key.startsWith("GECKIT_"))];
     const config = env.CLAUDE_CONFIG_DIR ?? join6(homedir6(), ".claude");
-    const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand2(env), ...terminalArgs(options, config)].map(quote).join(" ");
-    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch]);
-    if (ended2) {
+    const launch = ["exec", "env", ...omitted.flatMap((key) => ["-u", key]), `PATH=${env.PATH ?? ""}`, ...env.CLAUDE_CONFIG_DIR === void 0 ? [] : [`CLAUDE_CONFIG_DIR=${env.CLAUDE_CONFIG_DIR}`], claudeCommand2(env), ...terminalArgs(recovering && path !== void 0 ? { ...options, resume: true } : options, config)].map(quote).join(" ");
+    if (ended2 || stopping) return;
+    await tmux(["new-session", "-d", "-s", name, "-x", "140", "-y", "50", "-c", options.root, launch, ";", "set-option", "-p", "-t", name, "remain-on-exit", "on"]);
+    if (ended2 || stopping) {
       await tmux(["kill-session", "-t", name]).catch(() => void 0);
       return;
     }
     running = true;
-    log("info", "session.started", { session: options.id, resumed: options.resume === true });
+    log("info", "session.started", { session: options.id, resumed: options.resume === true || recovering && path !== void 0 });
     poll = setInterval(() => {
       void catchUp();
     }, 500);
   };
   const waitForPrompt = async () => {
     for (let attempt = 0; attempt < 600; attempt += 1) {
-      if (ended2) throw new Error("Claude Code session ended before input was ready.");
+      if (ended2 || stopping) throw new Error("Claude Code session ended before input was ready.");
+      if (!await alive()) {
+        const output = plain2(await tmux(["capture-pane", "-p", "-S", "-50", "-t", name]).catch(() => "")).trim().slice(-2e3);
+        throw new Error(["Claude Code exited before it was ready for input.", output].filter(Boolean).join("\n"));
+      }
       const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
       if (screen.trust && !trustHandled) await confirmTrust(screen);
       else if (screen.kind === "idle") return;
@@ -2268,19 +2274,36 @@ function holdTmux(runtime, options, hear, left, sent = () => {
       idle = 0;
       const sending = imagesIn(images).then(async (paths) => {
         const prompt = [...before, text2, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
-        if (!running && starting === void 0) starting = start();
-        await starting;
-        await waitForPrompt();
-        previousBlock = terminalScreen(await tmux(["capture-pane", "-p", "-t", name])).blocked;
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            if (!running && starting === void 0) starting = start();
+            await starting;
+            await waitForPrompt();
+            previousBlock = terminalScreen(await tmux(["capture-pane", "-p", "-t", name])).blocked;
+            break;
+          } catch (error) {
+            if (attempt !== 0 || ended2 || stopping || !running || await alive()) throw error;
+            clearInterval(poll);
+            await reading;
+            if (ended2 || stopping) throw error;
+            running = false;
+            trustHandled = false;
+            await tmux(["kill-session", "-t", name]).catch(() => void 0);
+            log("warn", "session.start.recovering", { session: options.id, reason: "pane-exited" });
+            starting = start(true);
+          }
+        }
         emit([], [], [{ kind: "doing", what: "sending to Claude Code" }]);
-        await keys(prompt);
+        await keys(prompt, () => {
+          if (ended2 || stopping) throw new Error("Claude Code session ended before input was sent.");
+        });
         sent("send");
         emit([], [], [{ kind: "doing", what: "waiting for Claude Code" }]);
       });
       void sending.finally(() => {
         submitting = false;
       }).catch((error) => {
-        emit([], [], [{ kind: "ended", how: "failed", text: error.message }]);
+        emit([], [], [{ kind: "ended", how: stopping ? "stopped" : "failed", ...stopping ? {} : { text: error.message } }]);
         void close();
       });
     },
