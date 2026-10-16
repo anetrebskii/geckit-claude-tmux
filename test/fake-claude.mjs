@@ -34,7 +34,7 @@ const choices = () => {
     paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i === 3 ? '   ' : `${i < 3 ? i + 1 : i}.`} ${i < 3 ? `[${menu.checked.has(i) ? '✓' : ' '}] ` : ''}${i === 2 && input ? input : label}`).join('\n')}\nEnter to select · ↑/↓ to navigate · Esc to cancel\n`)
     return
   }
-  paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review ? '' : '  Enter to select · Esc to cancel\n'}`)
+  paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review || menu.hook ? '' : '  Enter to select · Esc to cancel\n'}`)
 }
 const reply = (text) => {
   write({ type: 'assistant', uuid: 'reply-' + ++count, message: { model: 'claude-test', stop_reason: 'end_turn', content: [{ type: 'text', text }] } })
@@ -85,6 +85,11 @@ const say = (prompt) => {
   }
   if (prompt === 'review') {
     menu = { title: '────────────────────\n← ☒ Scope ☒ Files ✔ Submit →\n\nReview your answers\n\n ● Where should the demo run?\n   → Local demo (Recommended)\n ● May we edit both files?\n   → Yes, edit both\n\nReady to submit your answers?\n', options: ['Submit answers', 'Cancel'], review: true }
+    selection = 0
+    choices(); return
+  }
+  if (prompt === 'hook-confirmation') {
+    menu = { title: readFileSync(new URL('./hook-confirmation.txt', import.meta.url), 'utf8').split('❯ 1. Yes')[0].trimEnd(), options: ['Yes', 'No'], hook: true }
     selection = 0
     choices(); return
   }

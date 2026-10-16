@@ -1898,9 +1898,12 @@ function terminalScreen(text2) {
   const lines = plain2(text2).split("\n").map((line) => line.trimEnd());
   const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join("\n")) && /Enter to confirm/i.test(text2);
   const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1;
+  const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*(?:\d+[.)]|(?:Submit|Next)\s*$)/.test(line));
   const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*(?:\d+[.)]\s+|(?:Submit|Next)\s*$)/.test(line));
   const review = lines.some((line) => line.trim() === "Review your answers") && /(?:^|\n)\s*Ready to submit your answers\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Submit answers\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+Cancel\s*$/.test(lines.join("\n"));
-  if (selected !== -1 && (review || /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join("\n")))) {
+  const hookAt = lines.slice(0, selected).findLastIndex((line) => /^\s*(?:[│┃]\s*)?Hook PreToolUse:\S+ requires confirmation for this command:\s*$/.test(line));
+  const hook = hookAt !== -1 && /(?:^|\n)\s*Do you want to proceed\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Yes\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+No\s*(?:\n\s*Esc to cancel[^\n]*)?\s*$/.test(lines.slice(hookAt).join("\n"));
+  if (selected !== -1 && selected > prompt && (hook || review || /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join("\n")))) {
     const choice = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+)$/;
     const groups = [];
     for (const [at2, line] of lines.entries()) {
@@ -1925,14 +1928,13 @@ function terminalScreen(text2) {
     const first = group[0]?.at ?? selected;
     const border = lines.slice(0, first).findLastIndex((line) => /^\s*[─━-]{3}/.test(line));
     const above = lines.slice(border + 1, first).filter((line) => line.trim() !== "");
-    const title = above.slice(-6).map((line) => line.trim()).join("\n") || "Choose an option";
+    const title = (hook ? lines.slice(hookAt, first) : above.slice(-6)).map((line) => line.trim()).join("\n").trim() || "Choose an option";
     const options = group.map(({ number, label, input }) => ({ number, label, ...input ? { input } : {} }));
     const focus = group.findIndex((option) => option.at === selected);
     const signature = JSON.stringify({ title, options });
     return { kind: "question", title, options, focus, signature, trust, trustFocus, multiple };
   }
   const busy = lines.some((line) => /^\s*[✻✽✶✳✢·*].*(?:…|\.\.\.|esc to interrupt|ctrl\+c to interrupt|escape to interrupt)/i.test(line));
-  const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*\d+[.)]/.test(line));
   const bordered = prompt > 0 && /^\s*[─━-]{3}/.test(lines[prompt - 1]) && /^\s*[─━-]{3}/.test(lines[prompt + 1] ?? "");
   const blockedAt = lines.slice(0, prompt).findLastIndex((line) => /^\s*[●•]?\s*UserPromptSubmit operation blocked by hook:\s*$/.test(line));
   const blocked = bordered && blockedAt !== -1 ? lines.slice(blockedAt, prompt - 1).join("\n").replace(/^\s*[●•]\s*/, "").split("\n\nOriginal prompt:")[0].trim() : void 0;

@@ -1,0 +1,30 @@
+────────────────────
+cd /tmp/project && gh pr create --title "Preview" --body-file /tmp/pr.md
+────────────────────
+Hook PreToolUse:Bash requires confirmation for this command:
+own-english: this text is about to go out publicly and the checker flags it.
+
+66 words, 6 sentences, 4 paragraphs
+
+FLAG contractions 0 in 6 sentences - people contract, generated prose does not
+ok sentence rhythm mean 11, sd 8.2, 1-26 words
+ok paragraph shape [46, 14, 5, 1] words
+ok vocabulary clean
+ok spaced-hyphen asides 0
+ok em dash / smart quotes 0 - banned everywhere
+ok conceding opener none
+ok closing restatement none - check by hand
+ok parallel lists 0 sentence(s) with 3+ commas and 'and'
+ok correlatives 0 'not only ... but also'
+
+Run the pass in ~/.claude/skills/own-english/SKILL.md - repair against Alex's own
+words, never paraphrase around a flag, never plant contractions to clear one.
+A flag that is the register of the object rather than a defect is fine to publish;
+say which it is before confirming.
+settings.json to update hooks
+
+Do you want to proceed?
+❯ 1. Yes
+  2. No
+
+Esc to cancel · Tab to amend
