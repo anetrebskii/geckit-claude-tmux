@@ -108,8 +108,8 @@ process.stdout.write('\x1b[?2004h')
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
   for (let i = 0; i < chunk.length; i += 1) {
-    if (chunk.slice(i).startsWith('\x1b[200~')) { pasting = true; i += 5; continue }
-    if (chunk.slice(i).startsWith('\x1b[201~')) { pasting = false; i += 5; continue }
+    if (chunk.slice(i).startsWith('\x1b[200~')) { record({ pasteStarted: input }); pasting = true; i += 5; continue }
+    if (chunk.slice(i).startsWith('\x1b[201~')) { record({ pasteEnded: input }); pasting = false; i += 5; continue }
     if (chunk.slice(i).startsWith('\x1b[A') || chunk.slice(i).startsWith('\x1b[B')) {
       if (trusting) {
         if (!trustMissed) { trustMissed = true; record({ ignoredTrustNavigation: true }) }

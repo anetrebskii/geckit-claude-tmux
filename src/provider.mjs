@@ -312,8 +312,12 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
     }
     throw new Error("Claude Code did not become ready for input.");
   };
-  const keys = async (text, ready, submit = true) => {
-    for (const character of text) {
+  const keys = async (text, ready = () => {
+    if (ended || stopping) throw new Error("Claude Code session ended before input was sent.");
+  }, submit = true) => {
+    const characters = Array.from(text);
+    const pasteAt = characters.length > 80 ? 12 : characters.length;
+    for (const character of characters.slice(0, pasteAt)) {
       await ready?.();
       if (character === "\n") {
         await tmux(["send-keys", "-l", "-t", name, "\\"]);
@@ -322,6 +326,18 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
         await tmux(["send-keys", "-l", "-t", name, character]);
       }
       await delay(typingDelay());
+    }
+    if (pasteAt < characters.length) {
+      const buffer = `geckit-${randomUUID()}`;
+      try {
+        await ready?.();
+        await tmux(["load-buffer", "-b", buffer, "-"], characters.slice(pasteAt).join(""));
+        await ready?.();
+        await tmux(["paste-buffer", "-p", "-d", "-b", buffer, "-t", name]);
+        await delay(100);
+      } finally {
+        await tmux(["delete-buffer", "-b", buffer]).catch(() => void 0);
+      }
     }
     await ready?.();
     if (submit) await tmux(["send-keys", "-t", name, "Enter"]);

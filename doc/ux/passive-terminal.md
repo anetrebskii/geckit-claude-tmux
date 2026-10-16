@@ -65,7 +65,10 @@ Polling, file offsets and terminal inspection produce no user messages. Unknown 
 
 | Threshold | Value | Reason |
 | --- | --- | --- |
-| Typing interval | 30 ms per character | Submit prompts through ordinary terminal typing |
+| Typing interval | Random 15-45 ms per character | Preserve ordinary typing for short input |
+| Paste threshold | More than 80 Unicode characters | Bound per-character delays for longer messages |
+| Typed prefix for long input | 12 Unicode characters | Begin with ordinary typing, then paste the remainder without splitting a Unicode character |
+| Paste settling | 100 ms before submit/navigation | Let native bracketed-paste handling finish before the next key |
 | Poll interval | 500 ms | Preserve existing transcript cadence without per-token reads |
 | Idle confirmation | Two consecutive polls after observed activity | Avoid a transient prompt during redraw or submission |
 | Process check | Every four polls | Detect missing sessions and retained dead panes |
@@ -78,7 +81,7 @@ Question title and choices are Claude's native terminal text. Existing app label
 ## 8. Edge cases
 
 - Resume: begin at the old transcript's end; do not replay old answers.
-- Multiline text: type a backslash followed by Enter for each line break, then Enter to submit the whole prompt.
+- Multiline text: typed line breaks use backslash followed by Enter; pasted line breaks stay inside one bracketed paste. Enter submits the complete prompt once.
 - Incomplete JSONL line: retain bytes until its newline arrives.
 - Long-running tool or hook: retain Working while native busy indicators remain.
 - Fast answer: new transcript data provides turn activity even if no busy screen was sampled.
@@ -234,3 +237,12 @@ Requirements: reproduce startup exit with real tmux/fake Claude, recover the ori
 
 
 Verification: all 33 provider tests passed on isolated real tmux sockets with fake Claude after the startup-recovery implementation. The regression cases cover transient startup exit, bounded repeated exit with retained stderr, a vanished idle pane resuming the same ID, Stop during startup, and no replay after submission. A separate native Claude 2.1.301 startup probe, without sending any prompt, reproduced the reported conversation's permanent error: "No conversation found with session ID: c19beefb-91e9-4791-81a5-39516161b3b7". Its native transcript is absent in the current configuration. Automatic restart cannot reconstruct missing conversation history; the provider retains resume semantics and reports the diagnostic. The installed library and active conversations were not replaced or restarted. No renderer files changed, so no visual redesign or renderer-performance review applies.
+
+
+### Long input delivery - 2026-10-16
+
+First messages, follow-ups, Send now and custom answers use the same input rule. Up to 80 Unicode characters are typed as before. Longer text types its first 12 characters, loads the remaining text from stdin into a uniquely named tmux buffer, then pastes it with bracketed-paste mode. The system clipboard is untouched. Buffer cleanup runs on success, cancellation and transport failure. Existing readiness/cancellation checks run before loading, pasting and submitting. The driver waits 100 ms after pasting before Enter or native answer navigation; checkbox custom answers still defer Enter to the existing Submit/Next action.
+
+The existing "sending to Claude Code" and "waiting for Claude Code" states and transitions remain. No threshold preference or paste notification is added because choosing transport needs no user action. A failed paste uses the existing failure path; Send now retains its queued message and clears partial input when the terminal is safe to clear. Stop prevents later paste/submission. Startup recovery never replays text after input has started. Acceptance: exact short/long boundaries, Unicode and multiline integrity, one submission, successful Send now, buffer cleanup on failure, and Stop before submission in isolated real tmux with fake Claude.
+
+Verification: all 38 provider tests pass, including four input-delivery regressions on isolated real tmux with fake Claude. The boundary uses 80 emoji characters and 81 CJK characters; a multiline Unicode prompt over 12,000 characters arrives exactly once within the seven-second assertion. Long Send now and checkbox custom answers preserve exact content and explicit native review. Simulated paste failure removes the buffer, rejects Send now and clears partial input; Stop during the prefix prevents paste/submission. Bundle build, Node syntax and whitespace checks pass. No host contract, renderer components or styles changed; live model/account execution and installed-library activation were not exercised. The installed library and active conversations remain unchanged.
