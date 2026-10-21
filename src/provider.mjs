@@ -27,11 +27,26 @@ function terminalScreen(text) {
   const lines = plain(text).split('\n').map((line) => line.trimEnd())
   const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join('\n')) && /Enter to confirm/i.test(text)
   const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1
-  const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*(?:\d+[.)]|(?:Submit|Next)\s*$)/.test(line))
+  const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*(?:\d+[.)]|\[[ ✓✔xX]\]\s+|(?:Submit|Next|Enable selected)\s*$)/.test(line))
   const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*(?:\d+[.)]\s+|(?:Submit|Next)\s*$)/.test(line))
   const review = lines.some((line) => line.trim() === 'Review your answers') && /(?:^|\n)\s*Ready to submit your answers\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Submit answers\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+Cancel\s*$/.test(lines.join('\n'))
   const hookAt = lines.slice(0, selected).findLastIndex((line) => /^\s*(?:[│┃]\s*)?Hook PreToolUse:\S+ requires confirmation for this command:\s*$/.test(line))
   const hook = hookAt !== -1 && /(?:^|\n)\s*Do you want to proceed\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Yes\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+No\s*(?:\n\s*Esc to cancel[^\n]*)?\s*$/.test(lines.slice(hookAt).join('\n'))
+  const mcpAt = lines.findLastIndex((line) => /^\s*\d+ new MCP servers? found in this project\s*$/.test(line));
+  const footer = lines.findLastIndex((line) => line.trim() !== '');
+  if (mcpAt > prompt && /Space to select\s*·\s*Esc to reject all\s*$/.test(lines[footer] ?? '')) {
+    const titleEnd = lines.findIndex((line, at) => at > mcpAt && /^\s*(?:[❯›>]\s*)?\[[ ✓✔xX]\]\s+/.test(line));
+    const rows = lines.slice(titleEnd, footer).filter((line) => line.trim() !== '');
+    if (titleEnd !== -1 && rows.length > 1 && rows.at(-1).replace(/^\s*[❯›>]\s*/, '').trim() === 'Enable selected' && rows.slice(0, -1).every((line) => /^\s*(?:[❯›>]\s*)?\[[ ✓✔xX]\]\s+\S/.test(line))) {
+      const focus = rows.findIndex((line) => /^\s*[❯›>]/.test(line));
+      if (focus !== -1) {
+        const options = rows.map((line, at) => ({ label: line.replace(/^\s*[❯›>]\s*/, '').trim(), key: at < rows.length - 1 ? 'Space' : 'Enter' }));
+        options.push({ label: 'Reject all', key: 'Escape' });
+        const title = lines.slice(mcpAt, titleEnd).map((line) => line.trim()).filter(Boolean).join('\n');
+        return { kind: 'question', title, options, focus, signature: JSON.stringify({ title, options }), trust, trustFocus, multiple: true };
+      }
+    }
+  }
   if (selected !== -1 && selected > prompt && (hook || review || /Enter to (?:select|confirm)|Esc to (?:cancel|go back)|↑.*↓|up.*down.*select/i.test(lines.slice(selected + 1).join('\n')))) {
     const choice = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+)$/
     const groups = []
@@ -96,7 +111,6 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   let blocked = false;
   let previousBlock;
   let idle = 0;
-  let counter = 0;
   let pending;
   let answering = false;
   let reading = Promise.resolve();
@@ -202,7 +216,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   const ask = (screen) => {
     if (pending?.signature === screen.signature) return;
     resolveQuestion();
-    pending = { ...screen, id: `terminal:${String(++counter)}` };
+    pending = { ...screen, id: `terminal:${randomUUID()}` };
     emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: screen.title, choices: screen.options.map((option) => option.label) } }]);
   };
   const confirmTrust = async (screen) => {
@@ -307,12 +321,18 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
         const output = plain(await tmux(["capture-pane", "-p", "-S", "-50", "-t", name]).catch(() => "")).trim().slice(-2000);
         throw new Error(["Claude Code exited before it was ready for input.", output].filter(Boolean).join("\n"));
       }
+      if (answering) { attempt = 0; await delay(100); continue; }
       const screen = terminalScreen(await tmux(["capture-pane", "-p", "-t", name]));
       if (screen.trust && !trustHandled) await confirmTrust(screen);
-      else if (screen.kind === "idle") return;
+      else if (screen.kind === "question") { attempt = 0; ask(screen); }
+      else {
+        resolveQuestion();
+        if (screen.kind === "idle") return;
+      }
       await delay(100);
     }
-    throw new Error("Claude Code did not become ready for input.");
+    const output = plain(await tmux(["capture-pane", "-p", "-S", "-50", "-t", name]).catch(() => "")).trim().slice(-2000);
+    throw new Error(["Claude Code did not become ready for input.", output].filter(Boolean).join("\n"));
   };
   const keys = async (text, ready = () => {
     if (ended || stopping) throw new Error("Claude Code session ended before input was sent.");
@@ -347,6 +367,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   const close = async () => {
     if (ended) return;
     tasks.stopped();
+    resolveQuestion();
     ended = true;
     running = false;
     clearInterval(poll);
@@ -451,6 +472,20 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
         if (index === -1) {
           pending = void 0;
           ask(screen);
+          return;
+        }
+        const key = screen.options[index].key;
+        if (key !== void 0) {
+          const distance = key === "Escape" ? 0 : index - screen.focus;
+          if (distance !== 0) {
+            await tmux(["send-keys", "-t", name, ...Array.from({ length: Math.abs(distance) }, () => distance < 0 ? "Up" : "Down")]);
+            await delay(100);
+          }
+          if (ended || stopping) return;
+          await tmux(["send-keys", "-t", name, key]);
+          await delay(100);
+          resolveQuestion();
+          idle = 0;
           return;
         }
         const distance = index - screen.focus;

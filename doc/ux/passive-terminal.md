@@ -255,3 +255,39 @@ The existing Waiting state includes Claude's "Hook PreToolUse:<tool> requires co
 Transitions remain Working -> Waiting when the menu appears, Waiting -> Working after an explicit Yes or No, and Waiting -> Idle after Stop. The existing question card on desktop and phone owns the choice; Auto mode never answers this hook dialog itself. Recheck the current menu before sending input. There is no new component, timing threshold, notification or permission bypass. This restores the documented native-question behavior requested in Alex's missing-confirmation report.
 
 Verification: the reported full layout was already recognized, but its long diagnostic was truncated; omitting the footer reproduced an unknown state. These tests do not establish that the footer was absent in the original incident, because the live terminal had already continued and its dialog was no longer available in scrollback. All 41 provider tests pass with fake Claude in isolated real tmux, including both explicit answers, waiting without automatic approval, rejected Send now while waiting, full diagnostics, both focus positions, incomplete/quoted/stale layouts, and adjacent permissions, review, checkbox and delivery flows. The bundle build and syntax checks pass. Browser review of real Chat components was attempted with a fixture provider boundary; Chrome blocked automation because another extension UI was open, so full-window light/dark, focus and responsive review remain unverified. No renderer source, styles or polling cadence changed; renderer performance checklist is unaffected. Installed libraries and active sessions were not replaced or restarted.
+
+## Question identity across resumed drivers - 2026-10-17
+
+Every newly detected native selection receives a unique question ID, including when a driver resumes the same conversation after another driver. Polling an unchanged menu retains its current ID and emits no duplicate question. A changed menu resolves the previous card and creates a new one. An answer for an earlier driver cannot match a new menu. This remains silent and uses existing question controls; no terminal input is sent automatically.
+
+This fixes a driver-local counter restarting at terminal:1: the host's transcript map replaced an older card at its historic position, so desktop history rendering and the phone's tail could omit the current question while the board still reported Asking. Phone pagination and pending-card rendering have separate host repairs.
+
+Verification: the regression failed before the repair because both drivers emitted terminal:1. After the repair it passes using fake Claude in isolated real tmux: new driver identity differs, unchanged polling emits once, stale answers send no input, and the current answer reaches the native menu. The full suite passes 41 of 42 tests; the trust-navigation assertion at test/tmux.test.mjs:383 also fails on the unchanged source. After reloading only the GeckIt Local renderer, the reported real conversation visibly shows its pending Next step form at the end of chat with no Still working spinner. No answer was submitted to that live conversation.
+
+
+## Startup MCP selection - 2026-10-21
+
+Approved by Alex: display Claude's discovered-server selection so the person can select and proceed. Sending a first message or continuing a stopped conversation can encounter this before the input prompt. Mirror the native title, warning, checkbox states, "Enable selected" and "Reject all" in the existing desktop/phone question card. Toggling uses native Space; enabling uses native Enter; rejecting uses native Escape. Do not approve or reject servers automatically.
+
+| State | Visible result | Next action |
+| --- | --- | --- |
+| Starting | Existing working status | Wait or Stop |
+| Startup question | Native title, warning, checkboxes and actions | Toggle servers, Enable selected, Reject all, or Stop |
+| Sending | Existing sending status | Wait or Stop |
+| Failed | Existing failure with diagnostic | Try again |
+| Stopped | Existing stopped state | Send again |
+
+| From | Event | To | Visible result |
+| --- | --- | --- | --- |
+| Starting | Native selection detected, automatically | Startup question | Existing question card |
+| Startup question | Person toggles a server | Startup question | Updated native selection |
+| Startup question | Person enables or rejects servers | Starting | Card resolves; startup continues automatically |
+| Startup question | Native choice changes externally, automatically | Startup question/Starting | Updated card or resolved card |
+| Starting/Startup question | Person presses Stop | Stopped | Question resolves; unsent message is never submitted later |
+| Starting | Unknown startup does not become ready | Failed | Existing error plus terminal diagnostic |
+
+The original message and attachments remain pending and are sent exactly once after the prompt is ready. Known startup questions pause the existing readiness timeout; waiting for the person has no deadline. After a question closes the existing 60-second startup allowance restarts. Polling remains 100 ms during startup and 500 ms during work; no timer or transport notification is shown. Navigation keeps the existing 100 ms settling delay. Stale answers are rejected by recapturing the native screen; repeated answers while navigation is in flight are ignored. Unknown layouts never trigger automatic approval. A native question quoted above a later input prompt is historical output, not an active choice.
+
+No renderer layout or new settings are needed: this restores the existing native-question flow. Server permission choices remain the person's decision. Missing native history remains a resume error, not permission to create an empty conversation. Acceptance: screenshot parser, native keyboard toggles, explicit enable/reject, startup waiting, Stop, stale answers, one original delivery, and real-component desktop/phone review in both themes.
+
+Verification: all 10 startup/recovery tests pass on isolated real tmux with fake Claude, including a 65-second explicit-question wait beyond the old readiness timeout, selection changes with Space, Enter/Escape decisions, stale-answer rejection, Stop and exactly-once original submission. The full suite passes 45 of 46 tests; the trust-navigation assertion at test/tmux.test.mjs:383 also fails on the unchanged source. The built bundle passes syntax/import/parser checks and is staged for GeckIt Local's next restart in .ready-startup-mcp-01a15f10. Active snapshots and native conversations were not replaced. Shared Chat controls were reviewed in Chrome in desktop and 390x844 phone layouts, light/dark, with click/Space, submit/reject, visible Tab focus and long-history scrolling. The browser uses fixture responses, not the real Claude account. The host renderer classifies native Enable selected/Reject all as existing footer actions and hides custom input for this menu. No new renderer polling, animation, global scans or layout components were introduced. Source changes are delivered through the library main branch; no physical-phone installation was performed.

@@ -14,9 +14,9 @@ const until = async (condition) => {
   for (let i = 0; i < 500; i++) { if (await condition()) return; await delay(20) }
   throw new Error('Timed out waiting for input delivery')
 }
-async function fixture() {
+async function fixture(id = randomUUID()) {
   const folder = await realpath(await mkdtemp(join(tmpdir(), 'tmux-input-')))
-  const id = randomUUID(), server = 'input-' + id
+  const server = 'input-' + randomUUID()
   const wrapper = join(folder, 'tmux.mjs'), commandLog = join(folder, 'commands.jsonl')
   await writeFile(wrapper, `#!${process.execPath}\nimport {appendFileSync,existsSync} from 'node:fs';import {spawnSync} from 'node:child_process';const args=process.argv.slice(2);appendFileSync(${JSON.stringify(commandLog)},JSON.stringify(args)+'\\n');if(args.includes('paste-buffer')&&existsSync(${JSON.stringify(join(folder, 'fail-paste'))})){console.error('Test paste failure');process.exit(1)}const p=spawnSync(${JSON.stringify(binary)},args,{stdio:'inherit'});process.exit(p.status??1);\n`, { mode: 0o755 })
   const file = join(folder, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'), id + '.jsonl')
@@ -104,4 +104,30 @@ test('Stop during the typed prefix prevents long input from being pasted or subm
     assert.deepEqual(f.sent, [])
     assert.equal(f.buffers(), '')
   } finally { await f.cleanup() }
+})
+
+test('question IDs remain unique when a new driver resumes the same conversation', { skip: binary === undefined, timeout: 20000 }, async () => {
+  const id = randomUUID()
+  const first = await fixture(id)
+  let old
+  try {
+    first.driver.send('question')
+    await until(() => first.asks().length === 1)
+    old = first.asks()[0].ask
+  } finally { await first.cleanup() }
+  const next = await fixture(id)
+  try {
+    next.driver.send('question')
+    await until(() => next.asks().length === 1)
+    const current = next.asks()[0].ask
+    assert.notEqual(current, old, 'a resumed driver must not overwrite an earlier question card')
+    await delay(700)
+    assert.equal(next.asks().length, 1, 'unchanged menu polling must keep the same question')
+    next.driver.answer(old, 'A')
+    await delay(700)
+    assert.equal((await next.logs()).filter(entry => entry.choice).length, 0, 'stale answers must not reach the new native menu')
+    next.driver.answer(current, 'B')
+    await until(() => next.ended().length === 1)
+    assert.deepEqual((await next.logs()).filter(entry => entry.choice).map(entry => entry.choice), ['B'])
+  } finally { await next.cleanup() }
 })

@@ -23,6 +23,10 @@ const queued = []
 let pasting = false
 let typed = false
 let trusting = Boolean(process.env.CLAUDE_TEST_TRUST)
+let enabling = Boolean(process.env.CLAUDE_TEST_MCP)
+let mcpFocus = 0
+const mcpChecked = new Set([0, 1])
+const mcpScreen = () => paint(`────────────────────\n  2 new MCP servers found in this project\n  Select any you wish to enable.\n\n  MCP servers may execute code or access system resources. All tool calls require approval. Learn more in the MCP documentation.\n\n${['linear-formula', 'notion-formula', 'Enable selected'].map((label, i) => `  ${mcpFocus === i ? '❯' : ' '} ${i < 2 ? `[${mcpChecked.has(i) ? '✔' : ' '}] ` : '   '}${label}`).join('\n')}\n Space to select · Esc to reject all\n`)
 let trustFocus = 0
 let trustMissed = false
 const trustScreen = () => paint(`Quick safety check:\nIs this a project you created or one you trust?\n${trustFocus === 0 ? "❯" : " "} No, exit\n${trustFocus === 1 ? "❯" : " "} Yes, I trust this folder\nEnter to confirm`)
@@ -116,6 +120,7 @@ process.stdin.on('data', (chunk) => {
     if (chunk.slice(i).startsWith('\x1b[200~')) { record({ pasteStarted: input }); pasting = true; i += 5; continue }
     if (chunk.slice(i).startsWith('\x1b[201~')) { record({ pasteEnded: input }); pasting = false; i += 5; continue }
     if (chunk.slice(i).startsWith('\x1b[A') || chunk.slice(i).startsWith('\x1b[B')) {
+      if (enabling) { mcpFocus = Math.max(0, Math.min(2, mcpFocus + (chunk[i + 2] === 'A' ? -1 : 1))); mcpScreen() }
       if (trusting) {
         if (!trustMissed) { trustMissed = true; record({ ignoredTrustNavigation: true }) }
         else { trustFocus = chunk[i + 2] === 'B' ? 1 : 0; trustScreen() }
@@ -123,12 +128,15 @@ process.stdin.on('data', (chunk) => {
       if (menu) { selection = Math.max(0, Math.min(menu.options.length - 1, selection + (chunk[i + 2] === 'A' ? -1 : 1))); choices() }
       i += 2; continue
     }
+    if (enabling && chunk[i] === '\x1b') { record({ mcpRejected: true }); enabling = false; idle(); continue }
+    if (enabling && chunk[i] === ' ') { if (mcpFocus < 2) { if (mcpChecked.has(mcpFocus)) mcpChecked.delete(mcpFocus); else mcpChecked.add(mcpFocus); record({ mcpChecked: [...mcpChecked] }); mcpScreen() } continue }
     if (chunk[i] === '\x1b') { record({ escaped: true }); if (!busy && !menu && !trusting) idle(); continue }
     const c = chunk[i]
     if (c === '\x03') { clearTimeout(timer); queued.length = 0; menu = undefined; record({ stopped: true }); idle(); continue }
     if (c === '\x15') { input = ''; if (menu?.multiple) { menu.checked.delete(2); choices() } record({ clearedInput: true }); continue }
     if ((c === '\r' || c === '\n') && !pasting) {
       if (input.endsWith('\\')) { input = input.slice(0, -1) + '\n'; continue }
+      if (enabling) { if (mcpFocus === 2) { record({ mcpEnabled: [...mcpChecked] }); enabling = false; idle() } continue }
       if (trusting) { if (trustFocus !== 1) process.exit(1); trusting = false; record({ trusted: true }); idle(); continue }
       if (menu) {
         const choice = menu.options[selection]
@@ -167,6 +175,8 @@ setInterval(() => {
   if (command === 'change' && menu) { menu = { title: 'New question', options: ['Stay', 'Leave'] }; selection = 0; choices() }
   if (command === 'release' && busy && queued.length > 0) { record({ consumed: queued.shift() }); reply('injection consumed') }
 }, 40)
-if (process.env.CLAUDE_TEST_TRUST) {
+if (enabling) {
+  mcpScreen()
+} else if (process.env.CLAUDE_TEST_TRUST) {
   trustScreen()
 } else idle()
