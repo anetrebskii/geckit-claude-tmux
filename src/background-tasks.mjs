@@ -60,14 +60,16 @@ export function backgroundTasks(root, session, env, changed) {
           keep({ ...task, status: 'stopped', ended: at(entry) }, silent)
         }
       }
-      const id = string(result.backgroundTaskId) || (result.isAsync === true ? string(result.agentId) : '')
+      const forked = result.success === true && result.status === 'forked' && result.background === true
+      const helper = result.isAsync === true || forked
+      const id = string(result.backgroundTaskId) || (helper ? string(result.agentId) : '')
       if (/^[A-Za-z0-9_-]+$/.test(id)) {
         const previous = tasks.get(id)
         const body = results.map((block) => typeof block.content === 'string' ? block.content : '').join('\n')
         const file = string(result.outputFile) || /(?:Output is being written to|output_file): (\S+?)\.?(?:\s|$)/.exec(body)?.[1]
         keep({
-          id, kind: started?.tool === 'Agent' || result.isAsync === true ? 'local_agent' : started?.tool === 'Monitor' ? 'monitor' : 'local_bash',
-          what: string(started?.input.description) || previous?.what || id,
+          id, kind: started?.tool === 'Agent' || helper ? 'local_agent' : started?.tool === 'Monitor' ? 'monitor' : 'local_bash',
+          what: string(started?.input.description) || (forked ? string(started?.input.skill) || string(result.commandName) : '') || previous?.what || id,
           status: 'running', started: started?.started ?? previous?.started ?? at(entry),
           ...(string(started?.input.command) === '' ? {} : { command: started.input.command }),
           ...(use === undefined ? {} : { use }),

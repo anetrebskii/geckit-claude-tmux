@@ -190,3 +190,45 @@ test('recognizes only a final killed marker and preserves the final state', asyn
     assert.equal(updates.at(-1).ended, endedAt)
   } finally { await rm(folder, { recursive: true, force: true }) }
 })
+
+
+test('tracks forked background skills as helpers and preserves completion on replay', async () => {
+  const updates = []
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const skill = { type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id: 'skill-use', name: 'Skill', input: { skill: 'twinsai:pr-review', args: 'review PR 4069' } }] } }
+  const launched = result({ success: true, commandName: 'twinsai:pr-review', status: 'forked', background: true, agentId: 'a6ee73680361783b1', result: 'Running in the background as @twinsai-pr-review' }, 'skill-use')
+  await tracker.read(skill)
+  await tracker.read(launched)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].id, 'a6ee73680361783b1')
+  assert.equal(updates[0].kind, 'local_agent')
+  assert.equal(updates[0].what, 'twinsai:pr-review')
+  assert.equal(updates[0].status, 'running')
+  assert.equal(updates[0].started, Date.parse(timestamp))
+  assert.match(updates[0].output, /[\/]session[\/]tasks[\/]a6ee73680361783b1\.output$/)
+  await tracker.poll()
+  await tracker.read(launched)
+  assert.equal(updates.length, 1)
+  await tracker.read(notice(updates[0].id, 'completed'))
+  await tracker.read(launched)
+  assert.equal(updates.length, 2)
+  assert.equal(updates.at(-1).status, 'completed')
+  const restored = []
+  const history = backgroundTasks('/private/tmp', 'session', {}, (task) => restored.push(task))
+  await history.read(launched, true)
+  await history.read(notice(updates[0].id, 'completed'), true)
+  history.stopped(true)
+  assert.equal(restored.length, 0)
+  history.publish()
+  assert.equal(restored[0].what, 'twinsai:pr-review')
+  assert.equal(restored[0].status, 'completed')
+})
+
+test('ignores foreground, failed and malformed forked skill results', async () => {
+  const updates = []
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const fork = { success: true, commandName: 'review', status: 'forked', background: true, agentId: 'agent-one' }
+  for (const data of [{ ...fork, background: false }, { ...fork, success: false }, { ...fork, status: 'failed' }, { ...fork, agentId: '../outside' }, { ...fork, agentId: '' }]) await tracker.read(result(data))
+  await tracker.read({ ...result(fork), isSidechain: true })
+  assert.equal(updates.length, 0)
+})

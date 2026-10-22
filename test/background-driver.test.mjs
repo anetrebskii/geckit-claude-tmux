@@ -61,6 +61,26 @@ test('reports background work after a partial saved result and tracks it after t
     const log = (await readFile(join(folder, id + '.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
     assert.deepEqual(log.filter((entry) => entry.prompt).map((entry) => entry.prompt), ['background'])
     assert.equal(log.some((entry) => entry.stopped || entry.escaped), false)
+    const skillAt = '2026-10-22T11:35:58.954Z'
+    const skillOutput = join(folder, 'forked-helper.jsonl')
+    await writeFile(skillOutput, '')
+    const fork = { type: 'user', timestamp: skillAt, toolUseResult: { success: true, commandName: 'twinsai:pr-review', status: 'forked', background: true, agentId: 'forked-skill', outputFile: skillOutput }, message: { content: [{ type: 'tool_result', tool_use_id: 'skill-use', content: 'Running in the background as @twinsai-pr-review' }] } }
+    await appendFile(file, [
+      { type: 'assistant', timestamp: skillAt, message: { content: [{ type: 'tool_use', id: 'skill-use', name: 'Skill', input: { skill: 'twinsai:pr-review' } }] } },
+      fork,
+    ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+    await until(() => tasks().some((task) => task.id === 'forked-skill'))
+    const helper = tasks().find((task) => task.id === 'forked-skill')
+    assert.equal(helper.kind, 'local_agent')
+    assert.equal(helper.what, 'twinsai:pr-review')
+    assert.equal(helper.output, skillOutput)
+    assert.equal(helper.status, 'running')
+    assert.equal(ended().length, 1, 'a background skill does not end another foreground turn')
+    await appendFile(file, JSON.stringify({ type: 'attachment', timestamp: skillAt, attachment: { type: 'queued_command', prompt: '<task-notification><task-id>forked-skill</task-id><status>completed</status></task-notification>' } }) + '\n')
+    await until(() => tasks().some((task) => task.id === 'forked-skill' && task.status === 'completed'))
+    await appendFile(file, JSON.stringify(fork) + '\n')
+    await delay(1100)
+    assert.equal(tasks().filter((task) => task.id === 'forked-skill').length, 2, 'replayed launch does not resurrect a finished helper')
     driver.send('background')
     await until(() => ended().length === 2)
     const stoppedAt = '2026-10-12T17:55:21.449Z'
