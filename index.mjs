@@ -1897,7 +1897,7 @@ var terminalArgs = (options, config) => [
 ];
 var plain2 = (text2) => text2.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replaceAll("\xA0", " ");
 function terminalScreen(text2) {
-  const lines = plain2(text2).split("\n").map((line) => line.trimEnd());
+  const lines = plain2(text2).replace(/(Claude Code will automatically deny this request)\s+in\s+\d+:\d{2}(?=,\s+to avoid\b)/g, "$1").split("\n").map((line) => line.trimEnd());
   const trust = /Quick safety check:\s*Is this a project you created or one you trust\?/i.test(lines.join("\n")) && /Enter to confirm/i.test(text2);
   const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1;
   const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*(?:\d+[.)]|\[[ ✓✔xX]\]\s+|(?:Submit|Next|Enable selected)\s*$)/.test(line));

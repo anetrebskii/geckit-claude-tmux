@@ -97,6 +97,11 @@ const say = (prompt) => {
     selection = 0
     choices(); return
   }
+  if (prompt === 'countdown-confirmation') {
+    menu = { title: '────────────────────\nDangerous rm operation not ruled out — the shell may read this command differently than it was parsed\n⚠ Claude Code will automatically deny this request in 0:05, to avoid\nblocking progress on an unattended session\nDo you want to proceed?', options: ['Yes', 'No'] }
+    selection = 0
+    choices(); return
+  }
   if (prompt.startsWith('permission') || prompt === 'question') {
     menu = prompt === 'question' ? { title: 'Which option?', options: ['A', 'B', 'Type something.'] } : { title: 'Run command?\nnpm test', options: ['Yes', 'Yes, allow for this session', 'No'] }
     selection = 0
@@ -172,6 +177,8 @@ setInterval(() => {
   if (!command) return
   writeFileSync(control, '')
   if (command === 'background-end' && backgroundFile) writeFileSync(backgroundFile, 'copy complete\n\n[exited with code 0]\n')
+  if (command === 'countdown-tick' && menu) { menu.title = menu.title.replace('0:05', '0:04'); choices(); record({ countdownTick: true }) }
+  if (command === 'countdown-expire' && menu) { menu = undefined; idle(); record({ countdownExpired: true }) }
   if (command === 'change' && menu) { menu = { title: 'New question', options: ['Stay', 'Leave'] }; selection = 0; choices() }
   if (command === 'release' && busy && queued.length > 0) { record({ consumed: queued.shift() }); reply('injection consumed') }
 }, 40)
