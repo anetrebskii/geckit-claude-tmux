@@ -62,7 +62,7 @@ export function backgroundTasks(root, session, env, changed) {
       }
       const forked = result.success === true && result.status === 'forked' && result.background === true
       const helper = result.isAsync === true || forked
-      const id = string(result.backgroundTaskId) || (helper ? string(result.agentId) : '')
+      const id = string(result.backgroundTaskId) || (helper ? string(result.agentId) : started?.tool === 'Monitor' && results[0]?.is_error !== true ? string(result.taskId) : '')
       if (/^[A-Za-z0-9_-]+$/.test(id)) {
         const previous = tasks.get(id)
         const body = results.map((block) => typeof block.content === 'string' ? block.content : '').join('\n')

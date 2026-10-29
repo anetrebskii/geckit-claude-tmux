@@ -1778,7 +1778,7 @@ function backgroundTasks(root, session, env, changed) {
       }
       const forked = result.success === true && result.status === "forked" && result.background === true;
       const helper = result.isAsync === true || forked;
-      const id = string7(result.backgroundTaskId) || (helper ? string7(result.agentId) : "");
+      const id = string7(result.backgroundTaskId) || (helper ? string7(result.agentId) : started?.tool === "Monitor" && results[0]?.is_error !== true ? string7(result.taskId) : "");
       if (/^[A-Za-z0-9_-]+$/.test(id)) {
         const previous = tasks.get(id);
         const body = results.map((block) => typeof block.content === "string" ? block.content : "").join("\n");

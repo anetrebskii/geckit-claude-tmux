@@ -232,3 +232,32 @@ test('ignores foreground, failed and malformed forked skill results', async () =
   await tracker.read({ ...result(fork), isSidechain: true })
   assert.equal(updates.length, 0)
 })
+
+
+test('tracks Monitor taskId results and their completion without accepting other tool IDs', async () => {
+  const updates = []
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  await tracker.read(use('Monitor'))
+  const launched = result({ taskId: 'b5rwxq3yc', timeoutMs: 1800000, persistent: false })
+  await tracker.read(launched)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].id, 'b5rwxq3yc')
+  assert.equal(updates[0].kind, 'monitor')
+  assert.equal(updates[0].what, 'Watch copy')
+  assert.equal(updates[0].command, 'tail -f copy.log')
+  assert.equal(updates[0].started, Date.parse(timestamp))
+  await tracker.read(notice('b5rwxq3yc', 'completed'))
+  await tracker.read(use('Monitor'))
+  await tracker.read(launched)
+  assert.equal(updates.length, 2)
+  assert.equal(updates.at(-1).status, 'completed')
+  await tracker.read(use('TaskGet'))
+  await tracker.read(result({ taskId: 'unrelated' }))
+  await tracker.read(use('Monitor'))
+  const failed = result({ taskId: 'failed' })
+  failed.message.content[0].is_error = true
+  await tracker.read(failed)
+  await tracker.read(use('Monitor'))
+  await tracker.read(result({ taskId: '../outside' }))
+  assert.equal(updates.length, 2)
+})

@@ -61,6 +61,19 @@ test('reports background work after a partial saved result and tracks it after t
     const log = (await readFile(join(folder, id + '.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
     assert.deepEqual(log.filter((entry) => entry.prompt).map((entry) => entry.prompt), ['background'])
     assert.equal(log.some((entry) => entry.stopped || entry.escaped), false)
+    const monitorAt = '2026-10-29T10:11:44.560Z'
+    await appendFile(file, [
+      { type: 'assistant', timestamp: monitorAt, message: { content: [{ type: 'tool_use', id: 'monitor-use', name: 'Monitor', input: { description: 'Watch PR checks', command: 'gh pr checks 4094 --watch' } }] } },
+      { type: 'user', timestamp: monitorAt, toolUseResult: { taskId: 'monitor-one', timeoutMs: 1800000, persistent: false }, message: { content: [{ type: 'tool_result', tool_use_id: 'monitor-use', content: 'Monitor started (task monitor-one, expires in 30m)' }] } },
+    ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+    await until(() => tasks().some((task) => task.id === 'monitor-one'))
+    const monitor = tasks().find((task) => task.id === 'monitor-one')
+    assert.equal(monitor.kind, 'monitor')
+    assert.equal(monitor.what, 'Watch PR checks')
+    assert.equal(monitor.status, 'running')
+    assert.equal(ended().length, 1, 'starting a watch does not change the foreground turn')
+    await appendFile(file, JSON.stringify({ type: 'user', timestamp: monitorAt, message: { content: '<task-notification><task-id>monitor-one</task-id><status>completed</status></task-notification>' } }) + '\n')
+    await until(() => tasks().some((task) => task.id === 'monitor-one' && task.status === 'completed'))
     const skillAt = '2026-10-22T11:35:58.954Z'
     const skillOutput = join(folder, 'forked-helper.jsonl')
     await writeFile(skillOutput, '')
