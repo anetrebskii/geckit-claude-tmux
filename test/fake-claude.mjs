@@ -97,8 +97,8 @@ const say = (prompt) => {
     selection = 0
     choices(); return
   }
-  if (prompt === 'countdown-confirmation') {
-    menu = { title: '────────────────────\nDangerous rm operation not ruled out — the shell may read this command differently than it was parsed\n⚠ Claude Code will automatically deny this request in 0:05, to avoid\nblocking progress on an unattended session\nDo you want to proceed?', options: ['Yes', 'No'] }
+  if (/^countdown-(?:deny|block)-confirmation$/.test(prompt)) {
+    menu = { title: `────────────────────\nDangerous rm operation not ruled out — the shell may read this command differently than it was parsed\n⚠ Claude Code will automatically ${prompt.includes('-block-') ? 'block' : 'deny'} this request in 0:05, to avoid\nblocking progress on an unattended session\nDo you want to proceed?`, options: ['Yes', 'No'] }
     selection = 0
     choices(); return
   }

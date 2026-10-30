@@ -87,39 +87,39 @@ test('delivers hook Yes/No through the existing card and waits for explicit inpu
 })
 
 
-const countdown = (time) => `────────────────────
+const countdown = (time, action = 'deny') => `────────────────────
 rc=$?; grep -E "will be|must be|Plan:|Error" plan-openai.log | head -40
 ────────────────────
 Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed
-⚠ Claude Code will automatically deny this request in ${time}, to avoid
+⚠ Claude Code will automatically ${action} this request in ${time}, to avoid
 blocking progress on an unattended session
 Do you want to proceed?
 ❯ 1. Yes
   2. No
 Esc to cancel`
 
-test('keeps automatic-denial countdown ticks out of question identity and wording', () => {
-  const first = terminalScreen(countdown('0:05'))
+for (const action of ['deny', 'block']) test(`keeps automatic-${action} countdown ticks out of question identity and wording`, () => {
+  const first = terminalScreen(countdown('0:05', action))
   assert.equal(first.kind, 'question')
   assert(first.title.includes('Dangerous rm operation not ruled out'))
-  assert(first.title.includes('Claude Code will automatically deny this request, to avoid'))
+  assert(first.title.includes(`Claude Code will automatically ${action} this request, to avoid`))
   assert(!first.title.includes('0:05'))
   for (const time of ['0:04', '0:00', '1:00', '10:00']) {
-    const next = terminalScreen(countdown(time))
+    const next = terminalScreen(countdown(time, action))
     assert.equal(next.signature, first.signature)
     assert.equal(next.title, first.title)
   }
-  const wrapped = terminalScreen(countdown('0:04').replace('request in 0:04,', 'request in\n0:04,'))
+  const wrapped = terminalScreen(countdown('0:04', action).replace('request in 0:04,', 'request in\n0:04,'))
   assert.equal(wrapped.signature, first.signature)
-  assert.notEqual(terminalScreen(countdown('0:04').replace('not ruled out', 'detected')).signature, first.signature)
-  assert.notEqual(terminalScreen(countdown('0:04').replace('2. No', '2. Cancel')).signature, first.signature)
-  assert.equal(terminalScreen(countdown('0:00') + idle).kind, 'idle')
+  assert.notEqual(terminalScreen(countdown('0:04', action).replace('not ruled out', 'detected')).signature, first.signature)
+  assert.notEqual(terminalScreen(countdown('0:04', action).replace('2. No', '2. Cancel')).signature, first.signature)
+  assert.equal(terminalScreen(countdown('0:00', action) + idle).kind, 'idle')
   const other = terminalScreen('Retry after 0:05?\n❯ 1. Yes\n  2. No\nEsc to cancel')
   assert(other.title.includes('0:05'))
 })
 
 
-test('keeps one card across countdown ticks and still rejects genuinely stale answers', { skip: !available, timeout: 30000 }, async () => {
+for (const action of ['deny', 'block']) test(`keeps one card across ${action} countdown ticks and still rejects genuinely stale answers`, { skip: !available, timeout: 30000 }, async () => {
   const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-countdown-')))
   const binary = new URL('./fake-claude.mjs', import.meta.url).pathname
   const id = randomUUID()
@@ -136,7 +136,7 @@ test('keeps one card across countdown ticks and still rejects genuinely stale an
   const control = (text) => writeFile(join(folder, id + '.control'), text)
   try {
     for (const [index, answer] of ['Yes', 'No'].entries()) {
-      driver.send('countdown-confirmation')
+      driver.send(`countdown-${action}-confirmation`)
       await until(() => asks().length === index + 1)
       const ask = asks().at(-1)
       await control('countdown-tick')
@@ -151,7 +151,7 @@ test('keeps one card across countdown ticks and still rejects genuinely stale an
       assert.equal((await logs()).filter((line) => line.choice).at(-1).choice, answer)
       assert.equal(ended().at(-1).how, 'done')
     }
-    driver.send('countdown-confirmation')
+    driver.send(`countdown-${action}-confirmation`)
     await until(() => asks().length === 3)
     const stale = asks().at(-1)
     await control('change')
@@ -162,7 +162,7 @@ test('keeps one card across countdown ticks and still rejects genuinely stale an
     driver.answer(asks().at(-1).ask, 'Leave')
     await until(() => ended().length === 3)
     assert.equal((await logs()).filter((line) => line.choice).at(-1).choice, 'Leave')
-    driver.send('countdown-confirmation')
+    driver.send(`countdown-${action}-confirmation`)
     await until(() => asks().length === 5)
     const expired = asks().at(-1)
     await control('countdown-expire')
