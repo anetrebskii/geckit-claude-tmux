@@ -41,7 +41,7 @@ test('reports background work after a partial saved result and tracks it after t
     ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
     driver.send('background')
     await until(() => tasks().some((task) => task.id === 'old-task'))
-    assert.equal(tasks().find((task) => task.id === 'old-task').status, 'stopped')
+    assert.equal(tasks().find((task) => task.id === 'old-task').status, 'unknown')
     await until(() => tasks().some((task) => task.id === 'shell-one'))
     const task = tasks().find((task) => task.id === 'shell-one')
     assert.equal(task.status, 'running')
@@ -93,10 +93,10 @@ test('reports background work after a partial saved result and tracks it after t
     await until(() => tasks().some((task) => task.id === 'forked-skill' && task.status === 'completed'))
     await appendFile(file, JSON.stringify(fork) + '\n')
     await delay(1100)
-    assert.equal(tasks().filter((task) => task.id === 'forked-skill').length, 2, 'replayed launch does not resurrect a finished helper')
+    assert.equal(tasks().findLast((task) => task.id === 'forked-skill').status, 'completed', 'replayed launch does not resurrect a finished helper')
     driver.send('background')
     await until(() => ended().length === 2)
-    const stoppedAt = '2026-10-12T17:55:21.449Z'
+    const stoppedAt = new Date().toISOString()
     await appendFile(file, [
       { type: 'assistant', timestamp: stoppedAt, message: { content: [{ type: 'tool_use', id: 'stop-use', name: 'TaskStop', input: { task_id: 'shell-two' } }] } },
       { type: 'user', timestamp: stoppedAt, toolUseResult: { message: 'Successfully stopped task: shell-two (tail -f copy.log)', task_id: 'shell-two', task_type: 'local_bash' }, message: { content: [{ type: 'tool_result', tool_use_id: 'stop-use', content: '{}' }] } },

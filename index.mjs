@@ -9,7 +9,7 @@ import { execFile as execFile3 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createInterface as createInterface4 } from "node:readline";
-import { mkdir, mkdtemp, open as open4, rm as rm2, stat as stat3, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open as open5, rm as rm2, stat as stat3, writeFile } from "node:fs/promises";
 import { homedir as homedir6, tmpdir } from "node:os";
 import { join as join6 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1718,7 +1718,7 @@ function searchClaude(roots, asked, foldersOf = folders) {
 
 // src/background-tasks.mjs
 import { open as open3, realpath as realpath2 } from "node:fs/promises";
-import { join as join4 } from "node:path";
+import { dirname, join as join4 } from "node:path";
 var object3 = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 var string7 = (value) => typeof value === "string" ? value : "";
 var content = (entry) => object3(entry.message).content;
@@ -1726,11 +1726,64 @@ var blocks = (entry) => Array.isArray(content(entry)) ? content(entry) : [];
 var texts = (entry) => typeof content(entry) === "string" ? [content(entry)] : blocks(entry).filter((block) => block.type === "text").map((block) => string7(block.text));
 var ended = { completed: "completed", failed: "failed", stopped: "stopped", killed: "stopped" };
 var tag = (text2, name) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text2)?.[1]?.trim() ?? "";
-var at = (entry) => Date.parse(entry.timestamp) || Date.now();
-function backgroundTasks(root, session, env, changed) {
+var at = (entry) => Date.parse(entry.timestamp) || 0;
+var terminal = (task) => ["completed", "failed", "stopped"].includes(task.status);
+var ACTIVITY_WINDOW = 12e4;
+var activityKind = (tool) => /^(?:mcp__claude-in-chrome__|mcp__.*browser|browser_)/i.test(tool) ? "browser" : /^(?:computer|mcp__.*computer)/i.test(tool) ? "computer" : "tool";
+async function helperActivity(path) {
+  const file = await open3(path, "r").catch(() => void 0);
+  if (file === void 0) return void 0;
+  try {
+    const { size } = await file.stat();
+    const from = Math.max(0, size - 64e3);
+    const { buffer, bytesRead } = await file.read(Buffer.alloc(size - from), 0, size - from, from);
+    const text2 = buffer.subarray(0, bytesRead).toString("utf8");
+    const lines = (from === 0 ? text2 : text2.slice(text2.indexOf("\n") + 1)).split("\n").slice(0, -1);
+    const pending = /* @__PURE__ */ new Map();
+    let observedAt = 0, tool = "", status, endedAt;
+    for (const line of lines) {
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const time = at(entry);
+      if (time === 0 || time < observedAt) continue;
+      if (!["assistant", "user", "api-request", "system", "permission_request"].includes(entry.type)) continue;
+      observedAt = time;
+      if (entry.type === "api-request") {
+        status = void 0;
+        endedAt = void 0;
+      }
+      for (const block of blocks(entry)) {
+        if (block.type === "tool_use") {
+          status = void 0;
+          endedAt = void 0;
+          pending.set(block.id, block.name);
+          tool = string7(block.name);
+        }
+        if (block.type === "tool_result") {
+          if (pending.get(block.tool_use_id) === "SubagentHandback" && block.is_error !== true) {
+            status = "completed";
+            endedAt = time;
+          }
+          pending.delete(block.tool_use_id);
+        }
+      }
+      if (entry.type === "permission_request" || entry.type === "system" && entry.subtype === "permission_request") status = "asks";
+      else if (status !== "completed") status = [...pending.values()].includes("AskUserQuestion") ? "asks" : "running";
+    }
+    return observedAt === 0 ? void 0 : { observedAt, tool, status, endedAt };
+  } finally {
+    await file.close();
+  }
+}
+function backgroundTasks(root, session, env, changed, now = Date.now) {
   const tools = /* @__PURE__ */ new Map();
   const tasks = /* @__PURE__ */ new Map();
   let directory;
+  let transcript;
   const output = async (id) => {
     directory ??= Promise.all([
       realpath2(env.CLAUDE_CODE_TMPDIR ?? "/tmp").catch(() => env.CLAUDE_CODE_TMPDIR ?? "/tmp"),
@@ -1752,9 +1805,13 @@ function backgroundTasks(root, session, env, changed) {
     if (task === void 0 || status === void 0) return;
     const file = tag(notice, "output-file");
     const exit = /exit code (-?\d+)/.exec(tag(notice, "summary"))?.[1];
-    keep({ ...task, status, ended: task.ended ?? at(entry), ...file === "" ? {} : { output: file }, ...exit === void 0 ? {} : { exit: Number(exit) } }, silent);
+    if (at(entry) < (task.observedAt ?? task.started)) return;
+    keep({ ...task, status, observedAt: at(entry), ended: at(entry), ...file === "" ? {} : { output: file }, ...exit === void 0 ? {} : { exit: Number(exit) } }, silent);
   };
   return {
+    transcript(path) {
+      transcript = path;
+    },
     async read(entry, silent = false) {
       if (entry.isSidechain === true) return;
       if (entry.type === "assistant") {
@@ -1772,8 +1829,8 @@ function backgroundTasks(root, session, env, changed) {
       if (started?.tool === "TaskStop" && results[0]?.is_error !== true) {
         const task = tasks.get(string7(result.task_id));
         const stopped = /^Successfully stopped task: ([A-Za-z0-9_-]+)(?: \(|$)/.exec(string7(result.message))?.[1];
-        if (task?.status === "running" && task.id === started.input.task_id && task.id === stopped) {
-          keep({ ...task, status: "stopped", ended: at(entry) }, silent);
+        if (task !== void 0 && !terminal(task) && at(entry) >= (task.observedAt ?? task.started) && task.id === started.input.task_id && task.id === stopped) {
+          keep({ ...task, status: "stopped", observedAt: at(entry), ended: at(entry) }, silent);
         }
       }
       const forked = result.success === true && result.status === "forked" && result.background === true;
@@ -1788,10 +1845,12 @@ function backgroundTasks(root, session, env, changed) {
           kind: started?.tool === "Agent" || helper ? "local_agent" : started?.tool === "Monitor" ? "monitor" : "local_bash",
           what: string7(started?.input.description) || (forked ? string7(started?.input.skill) || string7(result.commandName) : "") || previous?.what || id,
           status: "running",
+          observedAt: at(entry),
           started: started?.started ?? previous?.started ?? at(entry),
           ...string7(started?.input.command) === "" ? {} : { command: started.input.command },
           ...use === void 0 ? {} : { use },
           ...previous,
+          ...previous !== void 0 && at(entry) > (previous.observedAt ?? previous.ended ?? previous.started) ? { status: "running", observedAt: at(entry), ended: void 0 } : {},
           output: file || previous?.output || await output(id)
         }, silent);
       }
@@ -1800,7 +1859,18 @@ function backgroundTasks(root, session, env, changed) {
     },
     async poll(silent = false) {
       for (const task of tasks.values()) {
-        if (task.status !== "running" || task.kind === "local_agent") continue;
+        if (task.kind === "local_agent") {
+          const canonical = transcript === void 0 ? void 0 : join4(dirname(transcript), session, "subagents", `agent-${task.id}.jsonl`);
+          const seen = await helperActivity(canonical ?? task.output) ?? (canonical === void 0 ? void 0 : await helperActivity(task.output));
+          const fresh = seen !== void 0 && seen.observedAt > (task.ended ?? 0) && seen.observedAt >= (task.observedAt ?? task.started);
+          if (fresh) {
+            const { ended: _ended, ...previous } = task;
+            keep({ ...previous, status: seen.status === "completed" ? "completed" : now() - seen.observedAt <= ACTIVITY_WINDOW && seen.observedAt <= now() + 5e3 ? seen.status : "unknown", observedAt: seen.observedAt, ...seen.endedAt === void 0 ? {} : { ended: seen.endedAt }, ...seen.tool === "" ? {} : { activity: activityKind(seen.tool), activityTool: seen.tool } }, silent);
+          } else if (terminal(task) && seen?.tool) keep({ ...task, activity: activityKind(seen.tool), activityTool: seen.tool }, silent);
+          else if (!terminal(task) && now() - (task.observedAt ?? task.started) > ACTIVITY_WINDOW) keep({ ...task, status: "unknown" }, silent);
+          continue;
+        }
+        if (task.status !== "running") continue;
         const file = await open3(task.output, "r").catch(() => void 0);
         if (file === void 0) continue;
         try {
@@ -1816,6 +1886,13 @@ function backgroundTasks(root, session, env, changed) {
         }
       }
     },
+    unconfirmed(silent = false) {
+      tools.clear();
+      for (const task of tasks.values()) if (!terminal(task)) keep({ ...task, status: "unknown" }, silent);
+    },
+    snapshot() {
+      return [...tasks.values()];
+    },
     stopped(silent = false) {
       tools.clear();
       for (const task of tasks.values()) {
@@ -1824,6 +1901,61 @@ function backgroundTasks(root, session, env, changed) {
     },
     publish() {
       for (const task of tasks.values()) changed(task);
+    }
+  };
+}
+
+// src/background-discovery.mjs
+import { StringDecoder } from "node:string_decoder";
+import { open as open4 } from "node:fs/promises";
+function backgroundDiscovery(env, now = Date.now) {
+  const readers = /* @__PURE__ */ new Map();
+  const reading = /* @__PURE__ */ new Map();
+  const read2 = async (root, session, path) => {
+    const file = await open4(path, "r").catch(() => void 0);
+    if (file === void 0) return [];
+    try {
+      const { size, ino } = await file.stat();
+      let cached = readers.get(path);
+      if (cached === void 0 || size < cached.offset || cached.ino !== ino) {
+        cached = { reader: backgroundTasks(root, session, env, () => {
+        }, now), offset: 0, remainder: "", decoder: new StringDecoder("utf8"), ino };
+        cached.reader.transcript(path);
+        readers.set(path, cached);
+      }
+      while (cached.offset < size) {
+        const length = Math.min(64e3, size - cached.offset);
+        const { buffer, bytesRead } = await file.read(Buffer.alloc(length), 0, length, cached.offset);
+        if (bytesRead === 0) break;
+        cached.offset += bytesRead;
+        const lines = (cached.remainder + cached.decoder.write(buffer.subarray(0, bytesRead))).split("\n");
+        cached.remainder = lines.pop();
+        for (const line of lines) {
+          let entry;
+          try {
+            entry = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          await cached.reader.read(entry, true);
+        }
+      }
+      await cached.reader.poll(true);
+      return cached.reader.snapshot();
+    } finally {
+      await file.close();
+    }
+  };
+  return {
+    read(root, session, path) {
+      const current = reading.get(path);
+      if (current !== void 0) return current;
+      const pending = read2(root, session, path).finally(() => reading.delete(path));
+      reading.set(path, pending);
+      return pending;
+    },
+    retain(paths) {
+      for (const path of readers.keys()) if (!paths.has(path)) readers.delete(path);
     }
   };
 }
@@ -2006,13 +2138,14 @@ function holdTmux(runtime, options, hear, left, sent = () => {
   const read2 = async () => {
     const path = await claudeFile2(options.root, options.id);
     if (path === void 0) return;
+    tasks.transcript(path);
     const size = (await stat3(path)).size;
     if (size < offset) {
       offset = 0;
       remainder = Buffer.alloc(0);
     }
     if (size === offset) return;
-    const file = await open4(path, "r");
+    const file = await open5(path, "r");
     let bytes;
     try {
       bytes = Buffer.alloc(size - offset);
@@ -2187,8 +2320,9 @@ function holdTmux(runtime, options, hear, left, sent = () => {
         } finally {
           lines.close();
         }
+        tasks.transcript(path);
+        tasks.unconfirmed(true);
         await tasks.poll(true);
-        tasks.stopped(true);
         tasks.publish();
       }
     }
@@ -2266,7 +2400,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {
   };
   const close = async () => {
     if (ended2) return;
-    tasks.stopped();
+    tasks.unconfirmed();
     resolveQuestion();
     ended2 = true;
     running = false;
@@ -2560,6 +2694,7 @@ function create(context = {}) {
   log("info", "provider.created");
   if (process.platform === "darwin" || process.platform === "linux") void findTmux().then(({ server }) => log("info", "tmux.found", { bundled: server.length > 0 }), (error) => log("warn", "tmux.missing", { error: error.message }));
   let known = [];
+  const discovery = backgroundDiscovery(planOnly());
   return {
     id: "claude-tmux",
     family: "claude",
@@ -2594,9 +2729,17 @@ function create(context = {}) {
     },
     list: async (roots) => {
       const rows = [];
+      const paths = /* @__PURE__ */ new Set();
       for (const root of roots) {
-        for (const { below, ...row } of await listClaude(root).catch(() => [])) rows.push(below === void 0 ? { ...row, root } : { ...row, root: below, project: root });
+        for (const { below, ...row } of await listClaude(root).catch(() => [])) {
+          const folder = below ?? root;
+          const path = await claudeFile(folder, row.id);
+          if (path !== void 0) paths.add(path);
+          const tasks = path === void 0 ? [] : await discovery.read(folder, row.id, path).catch(() => []);
+          rows.push({ ...row, root: folder, ...below === void 0 ? {} : { project: root }, ...tasks.length === 0 ? {} : { tasks } });
+        }
       }
+      discovery.retain(paths);
       return rows;
     },
     search: (roots, asked) => searchClaude(roots, asked),

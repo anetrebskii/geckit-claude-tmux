@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import * as claude from "./claude-runtime.mjs";
 import { backgroundTasks } from "./background-tasks.mjs";
+import { backgroundDiscovery } from "./background-discovery.mjs";
 import { findTmux, locateTmux } from "./tmux-binary.mjs";
 const typingDelay = () => 15 + Math.floor(Math.random() * 31);
 const object = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
@@ -132,6 +133,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   const read = async () => {
     const path = await claudeFile(options.root, options.id);
     if (path === void 0) return;
+    tasks.transcript(path);
     const size = (await stat(path)).size;
     if (size < offset) {
       offset = 0;
@@ -298,8 +300,9 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
             await tasks.read(entry, true);
           }
         } finally { lines.close(); }
+        tasks.transcript(path);
+        tasks.unconfirmed(true);
         await tasks.poll(true);
-        tasks.stopped(true);
         tasks.publish();
       }
     }
@@ -366,7 +369,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   };
   const close = async () => {
     if (ended) return;
-    tasks.stopped();
+    tasks.unconfirmed();
     resolveQuestion();
     ended = true;
     running = false;
@@ -649,6 +652,7 @@ function create(context = {}) {
   log("info", "provider.created");
   if (process.platform === "darwin" || process.platform === "linux") void findTmux().then(({ server }) => log("info", "tmux.found", { bundled: server.length > 0 }), (error) => log("warn", "tmux.missing", { error: error.message }));
   let known = [];
+  const discovery = backgroundDiscovery(claude.planOnly());
   return {
     id: "claude-tmux", family: "claude", transport: "tmux",
     name: "Claude Code (tmux)", shortName: "Claude", icon: "claude", browser: "claude",
@@ -668,9 +672,17 @@ function create(context = {}) {
     },
     list: async (roots) => {
       const rows = [];
+      const paths = new Set();
       for (const root of roots) {
-        for (const { below, ...row } of await claude.listClaude(root).catch(() => [])) rows.push(below === void 0 ? { ...row, root } : { ...row, root: below, project: root });
+        for (const { below, ...row } of await claude.listClaude(root).catch(() => [])) {
+          const folder = below ?? root;
+          const path = await claude.claudeFile(folder, row.id);
+          if (path !== undefined) paths.add(path);
+          const tasks = path === undefined ? [] : await discovery.read(folder, row.id, path).catch(() => []);
+          rows.push({ ...row, root: folder, ...(below === undefined ? {} : { project: root }), ...(tasks.length === 0 ? {} : { tasks }) });
+        }
       }
+      discovery.retain(paths);
       return rows;
     },
     search: (roots, asked) => claude.searchClaude(roots, asked),

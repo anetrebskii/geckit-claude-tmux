@@ -12,7 +12,7 @@ const notice = (id, status, file = '') => ({ type: 'user', isMeta: true, timesta
 test('tracks native saved starts and exit markers without treating silence as completion', async () => {
   const folder = await realpath(await mkdtemp('/private/tmp/claude-task-test-'))
   const updates = []
-  const tracker = backgroundTasks(folder, 'session', { CLAUDE_CODE_TMPDIR: folder }, (task) => updates.push(task))
+  const tracker = backgroundTasks(folder, 'session', { CLAUDE_CODE_TMPDIR: folder }, (task) => updates.push(task), () => Date.parse(timestamp))
   try {
     await tracker.read(use())
     await tracker.read(result({ backgroundTaskId: 'bg92qqid0' }))
@@ -46,7 +46,7 @@ test('keeps helper output paths and waits for meta completion notices', async ()
   const folder = await mkdtemp('/private/tmp/claude-helper-test-')
   const file = join(folder, 'agent.jsonl')
   const updates = []
-  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   try {
     await tracker.read(use('Agent'))
     await tracker.read(result({ isAsync: true, agentId: 'agent-one', outputFile: file }))
@@ -67,7 +67,7 @@ test('keeps helper output paths and waits for meta completion notices', async ()
 test('reports failed output and killed notices, preserving finished tasks on process closure', async () => {
   const folder = await mkdtemp('/private/tmp/claude-failed-task-')
   const updates = []
-  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   try {
     const outputFile = join(folder, 'failed.output')
     await tracker.read(use())
@@ -93,7 +93,7 @@ test('reports failed output and killed notices, preserving finished tasks on pro
 
 test('restores task history silently and stops unresolved work from the old process', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   await tracker.read(use(), true)
   await tracker.read(result({ backgroundTaskId: 'old-running' }), true)
   await tracker.read(result({ backgroundTaskId: 'old-completed' }), true)
@@ -106,7 +106,7 @@ test('restores task history silently and stops unresolved work from the old proc
 
 test('ignores sidechains, foreground helpers and invalid task IDs', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   await tracker.read({ ...result({ backgroundTaskId: 'side' }), isSidechain: true })
   await tracker.read(result({ agentId: 'sync-agent', isAsync: false }))
   await tracker.read(result({ backgroundTaskId: '../outside' }))
@@ -118,7 +118,7 @@ test('ends tasks whose notice was absorbed mid-turn and reads the saved output p
   const folder = await mkdtemp('/private/tmp/claude-absorbed-task-')
   const file = join(folder, 'b15tpggyl.output')
   const updates = []
-  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   try {
     await tracker.read(use())
     await tracker.read({ type: 'user', timestamp, toolUseResult: { backgroundTaskId: 'b15tpggyl' }, message: { content: [{ type: 'tool_result', tool_use_id: 'use', content: `Command running in background with ID: b15tpggyl. Output is being written to: ${file}. You will be notified when it completes.` }] } })
@@ -131,7 +131,7 @@ test('ends tasks whose notice was absorbed mid-turn and reads the saved output p
 
 test('ends a task from its successful TaskStop result without a notification or exit marker', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   await tracker.read(use())
   await tracker.read(result({ backgroundTaskId: 'bint88s11' }))
   const stop = { ...use('TaskStop', 'stop'), message: { content: [{ type: 'tool_use', id: 'stop', name: 'TaskStop', input: { task_id: 'bint88s11' } }] } }
@@ -149,7 +149,7 @@ test('ends a task from its successful TaskStop result without a notification or 
 
 test('ignores failed, mismatched and unrelated stop results', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   await tracker.read(result({ backgroundTaskId: 'running' }))
   const stop = { type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id: 'stop', name: 'TaskStop', input: { task_id: 'running' } }] } }
   const data = { message: 'Successfully stopped task: running', task_id: 'running' }
@@ -170,7 +170,7 @@ test('recognizes only a final killed marker and preserves the final state', asyn
   const folder = await mkdtemp('/private/tmp/claude-killed-task-')
   const outputFile = join(folder, 'killed.output')
   const updates = []
-  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks(folder, 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   try {
     await tracker.read(result({ backgroundTaskId: 'killed', outputFile }))
     await writeFile(outputFile, 'example [killed]\n')
@@ -194,7 +194,7 @@ test('recognizes only a final killed marker and preserves the final state', asyn
 
 test('tracks forked background skills as helpers and preserves completion on replay', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   const skill = { type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id: 'skill-use', name: 'Skill', input: { skill: 'twinsai:pr-review', args: 'review PR 4069' } }] } }
   const launched = result({ success: true, commandName: 'twinsai:pr-review', status: 'forked', background: true, agentId: 'a6ee73680361783b1', result: 'Running in the background as @twinsai-pr-review' }, 'skill-use')
   await tracker.read(skill)
@@ -226,7 +226,7 @@ test('tracks forked background skills as helpers and preserves completion on rep
 
 test('ignores foreground, failed and malformed forked skill results', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   const fork = { success: true, commandName: 'review', status: 'forked', background: true, agentId: 'agent-one' }
   for (const data of [{ ...fork, background: false }, { ...fork, success: false }, { ...fork, status: 'failed' }, { ...fork, agentId: '../outside' }, { ...fork, agentId: '' }]) await tracker.read(result(data))
   await tracker.read({ ...result(fork), isSidechain: true })
@@ -236,7 +236,7 @@ test('ignores foreground, failed and malformed forked skill results', async () =
 
 test('tracks Monitor taskId results and their completion without accepting other tool IDs', async () => {
   const updates = []
-  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task))
+  const tracker = backgroundTasks('/private/tmp', 'session', {}, (task) => updates.push(task), () => Date.parse(timestamp))
   await tracker.read(use('Monitor'))
   const launched = result({ taskId: 'b5rwxq3yc', timeoutMs: 1800000, persistent: false })
   await tracker.read(launched)
