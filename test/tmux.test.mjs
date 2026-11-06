@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 import { claudeState, readClaude } from '../src/claude-runtime.mjs'
-import { create, holdTmux, planNow, terminalScreen, usageReader, usageScreen } from '../index.mjs'
+import { create, holdTmux, planNow, terminalArgs, terminalScreen, usageReader, usageScreen } from '../index.mjs'
 
 const available = (() => {
   try { execFileSync('tmux', ['-V']); return process.platform !== 'win32' }
@@ -22,6 +22,13 @@ const until = async (condition) => {
   throw new Error('Timed out waiting for Claude Code.')
 }
 const idle = '────────────────────\n❯\u00a0Try "ask anything"\n────────────────────\n  custom status line\n'
+test('starts claude without Claude in Chrome and with the GeckIt browser plugin while the bridge is on', () => {
+  const options = { id: 'session', root: '/work', mode: 'manual' }
+  assert.equal(terminalArgs(options, '/config').includes('--no-chrome'), false)
+  const args = terminalArgs({ ...options, browser: { pluginDir: '/data/claude-plugin', rule: 'Use geckit browser' } }, '/config')
+  assert.deepEqual(args.slice(-5), ['--no-chrome', '--plugin-dir', '/data/claude-plugin', '--append-system-prompt', 'Use geckit browser'])
+})
+
 test('recognizes a prompt-hook block and keeps its diagnostic text', () => {
   const screen = terminalScreen('● UserPromptSubmit operation blocked by hook:\n[vpn-guard]: lookup timed out\nVPN Guard: request blocked.\n\nOriginal prompt: test\n\n' + idle)
   assert.equal(screen.kind, 'idle')

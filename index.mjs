@@ -2025,7 +2025,8 @@ var terminalArgs = (options, config) => [
   JSON.stringify({ claudeMdExcludes: [join6(config, "GECKIT.md")] }),
   ...options.model === void 0 ? [] : ["--model", options.model],
   ...options.resume ? ["--resume", options.id] : ["--session-id", options.id],
-  ...options.resume || options.fork === void 0 ? [] : ["--fork-session", "--resume", options.fork.from, ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]]
+  ...options.resume || options.fork === void 0 ? [] : ["--fork-session", "--resume", options.fork.from, ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]],
+  ...options.browser === void 0 ? [] : ["--no-chrome", "--plugin-dir", options.browser.pluginDir, "--append-system-prompt", options.browser.rule]
 ];
 var plain2 = (text2) => text2.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replaceAll("\xA0", " ");
 function terminalScreen(text2) {
@@ -2695,6 +2696,7 @@ function create(context = {}) {
   if (process.platform === "darwin" || process.platform === "linux") void findTmux().then(({ server }) => log("info", "tmux.found", { bundled: server.length > 0 }), (error) => log("warn", "tmux.missing", { error: error.message }));
   let known = [];
   const discovery = backgroundDiscovery(planOnly());
+  let browser;
   return {
     id: "claude-tmux",
     family: "claude",
@@ -2714,7 +2716,8 @@ function create(context = {}) {
     idleMs: 36e5,
     waitForExit: true,
     instructions: "own",
-    setInstructions: async () => {
+    setInstructions: async (_enabled, _names, given) => {
+      browser = given;
     },
     account: () => claudeAccount(),
     program: () => claudeProgram(),
@@ -2770,7 +2773,7 @@ function create(context = {}) {
       log("info", "provider.disposed");
       void usage.dispose();
     },
-    hold: (options, hear, left) => holdTmux(claude_runtime_exports, options, (heard) => {
+    hold: (options, hear, left) => holdTmux(claude_runtime_exports, browser === void 0 ? options : { ...options, browser }, (heard) => {
       for (const signal of heard.signals) if (signal.kind === "plan") usage.heard(signal.plan);
       hear(heard);
     }, left, (delivery) => usage.sent(delivery), log)
@@ -2781,6 +2784,7 @@ export {
   holdTmux,
   locateTmux,
   planNow,
+  terminalArgs,
   terminalScreen,
   usageReader,
   usageScreen

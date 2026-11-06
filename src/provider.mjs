@@ -19,7 +19,8 @@ const terminalArgs = (options, config) => [
   "--settings", JSON.stringify({ claudeMdExcludes: [join(config, "GECKIT.md")] }),
   ...options.model === void 0 ? [] : ["--model", options.model],
   ...options.resume ? ["--resume", options.id] : ["--session-id", options.id],
-  ...options.resume || options.fork === void 0 ? [] : ["--fork-session", "--resume", options.fork.from, ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]]
+  ...options.resume || options.fork === void 0 ? [] : ["--fork-session", "--resume", options.fork.from, ...options.fork.at === void 0 ? [] : ["--resume-session-at", options.fork.at]],
+  ...options.browser === void 0 ? [] : ["--no-chrome", "--plugin-dir", options.browser.pluginDir, "--append-system-prompt", options.browser.rule]
 ];
 
 const plain = (text) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replaceAll('\u00a0', ' ')
@@ -653,12 +654,13 @@ function create(context = {}) {
   if (process.platform === "darwin" || process.platform === "linux") void findTmux().then(({ server }) => log("info", "tmux.found", { bundled: server.length > 0 }), (error) => log("warn", "tmux.missing", { error: error.message }));
   let known = [];
   const discovery = backgroundDiscovery(claude.planOnly());
+  let browser;
   return {
     id: "claude-tmux", family: "claude", transport: "tmux",
     name: "Claude Code (tmux)", shortName: "Claude", icon: "claude", browser: "claude",
     loginCommand: "claude auth login", planName: "Claude", localOnly: true,
     available: true, subscriptionOnly: true, images: true, remoteControl: false, nativeGoals: false, idleMs: 3600000, waitForExit: true,
-    instructions: "own", setInstructions: async () => {},
+    instructions: "own", setInstructions: async (_enabled, _names, given) => { browser = given; },
     account: () => claude.claudeAccount(),
     program: () => claude.claudeProgram(),
     models: async () => {
@@ -707,10 +709,10 @@ function create(context = {}) {
     correct: async () => ({ ok: false, error: "Claude Code correction is not available." }),
     delete: (root, id) => claude.deleteClaude(root, id),
     dispose: () => { log("info", "provider.disposed"); void usage.dispose(); },
-    hold: (options, hear, left) => holdTmux(claude, options, (heard) => {
+    hold: (options, hear, left) => holdTmux(claude, browser === void 0 ? options : { ...options, browser }, (heard) => {
       for (const signal of heard.signals) if (signal.kind === "plan") usage.heard(signal.plan);
       hear(heard);
     }, left, (delivery) => usage.sent(delivery), log)
   };
 }
-export { create, holdTmux, locateTmux, planNow, terminalScreen, usageReader, usageScreen };
+export { create, holdTmux, locateTmux, planNow, terminalArgs, terminalScreen, usageReader, usageScreen };
