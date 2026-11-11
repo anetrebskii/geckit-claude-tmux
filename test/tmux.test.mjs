@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 import { claudeState, readClaude } from '../src/claude-runtime.mjs'
-import { create, holdTmux, planNow, terminalArgs, terminalScreen, usageReader, usageScreen } from '../index.mjs'
+import { create, holdTmux, planNow, questionText, terminalArgs, terminalScreen, usageReader, usageScreen } from '../index.mjs'
 
 const available = (() => {
   try { execFileSync('tmux', ['-V']); return process.platform !== 'win32' }
@@ -27,6 +27,39 @@ test('starts claude without Claude in Chrome and with the GeckIt browser plugin 
   assert.equal(terminalArgs(options, '/config').includes('--no-chrome'), false)
   const args = terminalArgs({ ...options, browser: { pluginDir: '/data/claude-plugin', rule: 'Use geckit browser' } }, '/config')
   assert.deepEqual(args.slice(-5), ['--no-chrome', '--plugin-dir', '/data/claude-plugin', '--append-system-prompt', 'Use geckit browser'])
+})
+
+test('uses the full AskUserQuestion text when its options are on screen', () => {
+  const screen = { title: 'cut tail', options: [{ label: 'Send' }, { label: 'Skip' }, { label: 'Type something.' }] }
+  const asked = { id: 'use', questions: [{ header: 'Bob', question: 'Bob asks for access.\nDraft: ok', options: [{ label: 'Send', description: 'Goes to Bob.' }, { label: 'Skip' }] }] }
+  assert.equal(questionText(screen, asked), 'Bob\nBob asks for access.\nDraft: ok\n\n• Send: Goes to Bob.')
+  assert.equal(questionText(screen, undefined), 'cut tail')
+  assert.equal(questionText({ ...screen, options: [{ label: 'Yes' }, { label: 'No' }] }, asked), 'cut tail', 'another prompt keeps the screen text')
+  const checkbox = { title: 'cut', options: [{ label: '[ ] A' }, { label: '[✓] B' }, { label: 'Submit' }] }
+  assert.equal(questionText(checkbox, { questions: [{ question: 'Pick', options: [{ label: 'A' }, { label: 'B' }] }] }), 'Pick')
+})
+
+test('asks with the full question from the transcript, not the wrapped screen tail', { skip: !available, timeout: 15000 }, async () => {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-long-question-test-')))
+  const id = randomUUID()
+  const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
+  await chmod(binary, 0o755)
+  const events = []
+  const driver = holdTmux({ claudeCommand: () => binary, OFF_PLAN: [], planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder }), claudeState, claudeFile: async () => { const file = join(folder, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'), id + '.jsonl'); return stat(file).then(() => file, () => undefined) }, readClaude }, { id, root: folder, mode: 'manual' }, (event) => events.push(event), () => {})
+  const asks = () => events.flatMap((event) => event.signals).filter((signal) => signal.kind === 'asks')
+  try {
+    driver.send('long-question')
+    await until(() => asks().length === 1)
+    const { question, choices } = asks()[0].wanted
+    assert.deepEqual(choices, ['Send', 'Skip', 'Type something.'])
+    assert(question.startsWith('Draft\nLine 1 of a long question\n'), question)
+    assert(question.includes('Line 12 of a long question'))
+    assert(question.includes('• Send: Sends the draft to Bob.'))
+    assert(!question.includes('│'))
+  } finally {
+    await driver.end()
+    await rm(folder, { recursive: true, force: true })
+  }
 })
 
 test('recognizes a prompt-hook block and keeps its diagnostic text', () => {

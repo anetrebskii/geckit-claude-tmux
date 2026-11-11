@@ -87,6 +87,23 @@ function terminalScreen(text) {
   return { kind: busy ? 'working' : bordered ? 'idle' : 'unknown', trust, trustFocus, ...blocked === undefined ? {} : { blocked } }
 }
 
+const bare = (label) => label.replace(/^\[[ ✓✔xX]\]\s+/, '').trim()
+
+// The terminal shows a long AskUserQuestion wrapped and cut to the lines above its options.
+// When the transcript holds the pending call whose options are on screen, use its full text.
+function questionText(screen, asked) {
+  const shown = new Set(screen.options.map((option) => bare(option.label)))
+  for (const raw of asked?.questions ?? []) {
+    const one = object(raw)
+    const options = Array.isArray(one.options) ? one.options.map(object) : []
+    const labels = options.map((option) => string(option.label)).filter(Boolean)
+    if (string(one.question) === '' || labels.length === 0 || !labels.every((label) => shown.has(label))) continue
+    const described = options.filter((option) => string(option.description) !== '').map((option) => `• ${string(option.label)}: ${string(option.description)}`)
+    return [string(one.header), string(one.question), ...described.length > 0 ? ['', ...described] : []].filter((line, at) => at > 0 || line !== '').join('\n')
+  }
+  return screen.title
+}
+
 function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {}) {
   const { claudeCommand, OFF_PLAN, planOnly, claudeState, readClaude, claudeFile } = runtime;
   const environment = () => Object.fromEntries(Object.entries(planOnly()).filter(([key]) => !key.startsWith("GECKIT_")));
@@ -114,6 +131,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
   let previousBlock;
   let idle = 0;
   let pending;
+  let asked;
   let answering = false;
   let reading = Promise.resolve();
   let poll;
@@ -170,6 +188,11 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
       if (entry["type"] === "system" && entry["subtype"] === "local_command" && entry["commandRun"] !== void 0) activity = true;
       if (entry["isMeta"] === true) continue;
       const type = string(entry["type"]);
+      for (const raw of Array.isArray(object(entry["message"])["content"]) ? entry["message"]["content"] : []) {
+        const block = object(raw);
+        if (type === "assistant" && block["type"] === "tool_use" && block["name"] === "AskUserQuestion") asked = { id: string(block["id"]), questions: Array.isArray(object(block["input"])["questions"]) ? block["input"]["questions"] : [] };
+        else if (type === "user" && block["type"] === "tool_result" && asked !== void 0 && block["tool_use_id"] === asked.id) asked = void 0;
+      }
       if (type === "cost-state") {
         const cost = entry["totalCostUSD"];
         if (typeof cost === "number") emit([], [], [{ kind: "spend", cost }]);
@@ -220,7 +243,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
     if (pending?.signature === screen.signature) return;
     resolveQuestion();
     pending = { ...screen, id: `terminal:${randomUUID()}` };
-    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: screen.title, choices: screen.options.map((option) => option.label) } }]);
+    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: questionText(screen, asked), choices: screen.options.map((option) => option.label) } }]);
   };
   const confirmTrust = async (screen) => {
     if (!screen.trust || trustHandled || screen.trustFocus === -1) return;
@@ -715,4 +738,4 @@ function create(context = {}) {
     }, left, (delivery) => usage.sent(delivery), log)
   };
 }
-export { create, holdTmux, locateTmux, planNow, terminalArgs, terminalScreen, usageReader, usageScreen };
+export { create, holdTmux, locateTmux, planNow, questionText, terminalArgs, terminalScreen, usageReader, usageScreen };
