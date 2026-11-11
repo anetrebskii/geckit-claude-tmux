@@ -240,10 +240,13 @@ function holdTmux(runtime, options, hear, left, sent = () => {}, log = () => {})
     pending = void 0;
   };
   const ask = (screen) => {
-    if (pending?.signature === screen.signature) return;
+    // Claude Code may show the dialog before the AskUserQuestion call reaches the transcript:
+    // ask again once the full text is known instead of keeping the wrapped screen tail.
+    const question = questionText(screen, asked);
+    if (pending?.signature === screen.signature && pending.question === question) return;
     resolveQuestion();
-    pending = { ...screen, id: `terminal:${randomUUID()}` };
-    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: questionText(screen, asked), choices: screen.options.map((option) => option.label) } }]);
+    pending = { ...screen, question, id: `terminal:${randomUUID()}` };
+    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question, choices: screen.options.map((option) => option.label) } }]);
   };
   const confirmTrust = async (screen) => {
     if (!screen.trust || trustHandled || screen.trustFocus === -1) return;

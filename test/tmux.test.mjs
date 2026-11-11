@@ -62,6 +62,31 @@ test('asks with the full question from the transcript, not the wrapped screen ta
   }
 })
 
+test('asks again with the full question when the transcript lags behind the dialog', { skip: !available, timeout: 15000 }, async () => {
+  const folder = await realpath(await mkdtemp(join(tmpdir(), 'claude-late-question-test-')))
+  const id = randomUUID()
+  const binary = join(dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs')
+  await chmod(binary, 0o755)
+  const events = []
+  const driver = holdTmux({ claudeCommand: () => binary, OFF_PLAN: [], planOnly: () => ({ ...process.env, CLAUDE_CONFIG_DIR: folder }), claudeState, claudeFile: async () => { const file = join(folder, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'), id + '.jsonl'); return stat(file).then(() => file, () => undefined) }, readClaude }, { id, root: folder, mode: 'manual' }, (event) => events.push(event), () => {})
+  const signals = () => events.flatMap((event) => event.signals)
+  const asks = () => signals().filter((signal) => signal.kind === 'asks')
+  try {
+    driver.send('late-question')
+    await until(() => asks().some((ask) => ask.wanted.question.startsWith('Draft\nLine 1 of a long question')))
+    const first = asks()[0]
+    const last = asks().at(-1)
+    assert(!first.wanted.question.includes('Line 1 of'), 'the first ask comes from the screen')
+    assert(signals().some((signal) => signal.kind === 'resolved' && signal.ask === first.ask), 'the screen-only ask is replaced')
+    assert.deepEqual(last.wanted.choices, ['Send', 'Skip', 'Type something.'])
+    driver.answer(last.ask, 'Skip')
+    await until(async () => (await readFile(join(folder, id + '.log'), 'utf8')).includes('"choice":"Skip"'))
+  } finally {
+    await driver.end()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
 test('recognizes a prompt-hook block and keeps its diagnostic text', () => {
   const screen = terminalScreen('● UserPromptSubmit operation blocked by hook:\n[vpn-guard]: lookup timed out\nVPN Guard: request blocked.\n\nOriginal prompt: test\n\n' + idle)
   assert.equal(screen.kind, 'idle')

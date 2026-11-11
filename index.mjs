@@ -2244,10 +2244,11 @@ function holdTmux(runtime, options, hear, left, sent = () => {
     pending = void 0;
   };
   const ask = (screen) => {
-    if (pending?.signature === screen.signature) return;
+    const question = questionText(screen, asked);
+    if (pending?.signature === screen.signature && pending.question === question) return;
     resolveQuestion();
-    pending = { ...screen, id: `terminal:${randomUUID2()}` };
-    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: questionText(screen, asked), choices: screen.options.map((option) => option.label) } }]);
+    pending = { ...screen, question, id: `terminal:${randomUUID2()}` };
+    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question, choices: screen.options.map((option) => option.label) } }]);
   };
   const confirmTrust = async (screen) => {
     if (!screen.trust || trustHandled || screen.trustFocus === -1) return;
