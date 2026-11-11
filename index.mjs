@@ -1208,8 +1208,8 @@ function linksInText(texts2) {
       const had = found.get(url);
       if (had === void 0 || had.text === void 0) found.set(url, text2 === url ? { url } : { url, text: text2 });
     }
-    for (const [bare] of said.matchAll(BARE)) {
-      const url = bare.replace(TRAILING, "");
+    for (const [bare2] of said.matchAll(BARE)) {
+      const url = bare2.replace(TRAILING, "");
       if (!found.has(url)) found.set(url, { url });
     }
   }
@@ -2090,6 +2090,19 @@ function terminalScreen(text2) {
   const blocked = bordered && blockedAt !== -1 ? lines.slice(blockedAt, prompt - 1).join("\n").replace(/^\s*[●•]\s*/, "").split("\n\nOriginal prompt:")[0].trim() : void 0;
   return { kind: busy ? "working" : bordered ? "idle" : "unknown", trust, trustFocus, ...blocked === void 0 ? {} : { blocked } };
 }
+var bare = (label) => label.replace(/^\[[ ✓✔xX]\]\s+/, "").trim();
+function questionText(screen, asked) {
+  const shown2 = new Set(screen.options.map((option) => bare(option.label)));
+  for (const raw of asked?.questions ?? []) {
+    const one = object4(raw);
+    const options = Array.isArray(one.options) ? one.options.map(object4) : [];
+    const labels = options.map((option) => string8(option.label)).filter(Boolean);
+    if (string8(one.question) === "" || labels.length === 0 || !labels.every((label) => shown2.has(label))) continue;
+    const described = options.filter((option) => string8(option.description) !== "").map((option) => `\u2022 ${string8(option.label)}: ${string8(option.description)}`);
+    return [string8(one.header), string8(one.question), ...described.length > 0 ? ["", ...described] : []].filter((line, at2) => at2 > 0 || line !== "").join("\n");
+  }
+  return screen.title;
+}
 function holdTmux(runtime, options, hear, left, sent = () => {
 }, log = () => {
 }) {
@@ -2119,6 +2132,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {
   let previousBlock;
   let idle = 0;
   let pending;
+  let asked;
   let answering = false;
   let reading = Promise.resolve();
   let poll;
@@ -2175,6 +2189,11 @@ function holdTmux(runtime, options, hear, left, sent = () => {
       if (entry["type"] === "system" && entry["subtype"] === "local_command" && entry["commandRun"] !== void 0) activity = true;
       if (entry["isMeta"] === true) continue;
       const type = string8(entry["type"]);
+      for (const raw of Array.isArray(object4(entry["message"])["content"]) ? entry["message"]["content"] : []) {
+        const block = object4(raw);
+        if (type === "assistant" && block["type"] === "tool_use" && block["name"] === "AskUserQuestion") asked = { id: string8(block["id"]), questions: Array.isArray(object4(block["input"])["questions"]) ? block["input"]["questions"] : [] };
+        else if (type === "user" && block["type"] === "tool_result" && asked !== void 0 && block["tool_use_id"] === asked.id) asked = void 0;
+      }
       if (type === "cost-state") {
         const cost = entry["totalCostUSD"];
         if (typeof cost === "number") emit([], [], [{ kind: "spend", cost }]);
@@ -2228,7 +2247,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {
     if (pending?.signature === screen.signature) return;
     resolveQuestion();
     pending = { ...screen, id: `terminal:${randomUUID2()}` };
-    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: screen.title, choices: screen.options.map((option) => option.label) } }]);
+    emit([], [], [{ kind: "asks", ask: pending.id, wanted: { kind: "question", question: questionText(screen, asked), choices: screen.options.map((option) => option.label) } }]);
   };
   const confirmTrust = async (screen) => {
     if (!screen.trust || trustHandled || screen.trustFocus === -1) return;
@@ -2784,6 +2803,7 @@ export {
   holdTmux,
   locateTmux,
   planNow,
+  questionText,
   terminalArgs,
   terminalScreen,
   usageReader,

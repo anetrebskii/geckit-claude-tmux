@@ -102,6 +102,13 @@ const say = (prompt) => {
     selection = 0
     choices(); return
   }
+  if (prompt === 'long-question') {
+    const lines = Array.from({ length: 12 }, (_, i) => `Line ${i + 1} of a long question`)
+    write({ type: 'assistant', uuid: 'ask-' + ++count, message: { model: 'claude-test', content: [{ type: 'tool_use', id: 'ask-use', name: 'AskUserQuestion', input: { questions: [{ header: 'Draft', question: lines.join('\n'), options: [{ label: 'Send', description: 'Sends the draft to Bob.' }, { label: 'Skip', description: 'Sends nothing.' }] }] } }] } })
+    menu = { title: '────────────────────\n☐ Draft\n\n' + lines.slice(-6).map((line) => '│ ' + line).join('\n') + '\n', options: ['Send', 'Skip', 'Type something.'] }
+    selection = 0
+    choices(); return
+  }
   if (prompt.startsWith('permission') || prompt === 'question') {
     menu = prompt === 'question' ? { title: 'Which option?', options: ['A', 'B', 'Type something.'] } : { title: 'Run command?\nnpm test', options: ['Yes', 'Yes, allow for this session', 'No'] }
     selection = 0
