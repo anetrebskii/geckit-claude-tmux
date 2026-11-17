@@ -108,3 +108,15 @@ test('coalesces concurrent discovery without skipping chunks or returning incomp
     assert.equal((await discovery.read(folder, 'parent', path))[1].status, 'completed')
   } finally { await rm(folder, { recursive: true, force: true }) }
 })
+
+test('one notice that ends several shell tasks stops every one of them', async () => {
+  const folder = await mkdtemp('/private/tmp/discovery-orphans-')
+  const path = join(folder, 'parent.jsonl')
+  const shell = (time, id) => entry(time, 'user', { toolUseResult: { backgroundTaskId: id }, message: { content: [] } })
+  const orphans = entry(base, 'user', { message: { content: '<task-notification>\n<task-id>one</task-id>\n<task-id>two</task-id>\n<task-id>three</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>3 background shell command tasks didn\'t finish before the previous session ended.</summary>\n</task-notification>' } })
+  try {
+    await writeFile(path, lines([shell(base - 3000, 'one'), shell(base - 2000, 'two'), shell(base - 1000, 'three'), orphans]))
+    const tasks = await backgroundDiscovery({}, () => base).read(folder, 'parent', path)
+    assert.deepEqual(tasks.map((t) => [t.id, t.status, t.ended]), [['one', 'stopped', base], ['two', 'stopped', base], ['three', 'stopped', base]])
+  } finally { await rm(folder, { recursive: true, force: true }) }
+})

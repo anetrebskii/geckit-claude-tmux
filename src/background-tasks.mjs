@@ -67,13 +67,17 @@ export function backgroundTasks(root, session, env, changed, now = Date.now) {
   const told = (entry, text, silent) => {
     const notice = /^\s*<task-notification>([\s\S]*)<\/task-notification>\s*$/.exec(text)?.[1]
     if (notice === undefined) return
-    const task = tasks.get(tag(notice, 'task-id'))
     const status = ended[tag(notice, 'status')]
-    if (task === undefined || status === undefined) return
-    const file = tag(notice, 'output-file')
-    const exit = /exit code (-?\d+)/.exec(tag(notice, 'summary'))?.[1]
-    if (at(entry) < (task.observedAt ?? task.started)) return
-    keep({ ...task, status, observedAt: at(entry), ended: at(entry), ...(file === '' ? {} : { output: file }), ...(exit === undefined ? {} : { exit: Number(exit) }) }, silent)
+    if (status === undefined) return
+    // One notice can end several tasks, as Claude Code does for those left running when its previous process exited.
+    const ids = [...notice.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((match) => match[1].trim())
+    const file = ids.length === 1 ? tag(notice, 'output-file') : ''
+    const exit = ids.length === 1 ? /exit code (-?\d+)/.exec(tag(notice, 'summary'))?.[1] : undefined
+    for (const id of ids) {
+      const task = tasks.get(id)
+      if (task === undefined || at(entry) < (task.observedAt ?? task.started)) continue
+      keep({ ...task, status, observedAt: at(entry), ended: at(entry), ...(file === '' ? {} : { output: file }), ...(exit === undefined ? {} : { exit: Number(exit) }) }, silent)
+    }
   }
   return {
     transcript(path) { transcript = path },

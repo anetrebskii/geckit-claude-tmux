@@ -1800,13 +1800,16 @@ function backgroundTasks(root, session, env, changed, now = Date.now) {
   const told = (entry, text2, silent) => {
     const notice = /^\s*<task-notification>([\s\S]*)<\/task-notification>\s*$/.exec(text2)?.[1];
     if (notice === void 0) return;
-    const task = tasks.get(tag(notice, "task-id"));
     const status = ended[tag(notice, "status")];
-    if (task === void 0 || status === void 0) return;
-    const file = tag(notice, "output-file");
-    const exit = /exit code (-?\d+)/.exec(tag(notice, "summary"))?.[1];
-    if (at(entry) < (task.observedAt ?? task.started)) return;
-    keep({ ...task, status, observedAt: at(entry), ended: at(entry), ...file === "" ? {} : { output: file }, ...exit === void 0 ? {} : { exit: Number(exit) } }, silent);
+    if (status === void 0) return;
+    const ids = [...notice.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((match) => match[1].trim());
+    const file = ids.length === 1 ? tag(notice, "output-file") : "";
+    const exit = ids.length === 1 ? /exit code (-?\d+)/.exec(tag(notice, "summary"))?.[1] : void 0;
+    for (const id of ids) {
+      const task = tasks.get(id);
+      if (task === void 0 || at(entry) < (task.observedAt ?? task.started)) continue;
+      keep({ ...task, status, observedAt: at(entry), ended: at(entry), ...file === "" ? {} : { output: file }, ...exit === void 0 ? {} : { exit: Number(exit) } }, silent);
+    }
   };
   return {
     transcript(path) {
