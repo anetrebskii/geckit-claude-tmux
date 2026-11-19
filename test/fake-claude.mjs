@@ -88,7 +88,7 @@ const say = (prompt) => {
     choices(); return
   }
   if (prompt === 'review') {
-    menu = { title: '────────────────────\n← ☒ Scope ☒ Files ✔ Submit →\n\nReview your answers\n\n ● Where should the demo run?\n   → Local demo (Recommended)\n ● May we edit both files?\n   → Yes, edit both\n\nReady to submit your answers?\n', options: ['Submit answers', 'Cancel'], review: true }
+    menu = { title: '────────────────────\n← ☒ Scope ☒ Files ✔ Submit →\n\nReview your answers\n\n ● Where should the demo run?\n   → Local demo (Recommended)\n ● May we edit both files?\n   → Yes, edit both\n', options: ['Submit answers', 'Cancel'], review: true }
     selection = 0
     choices(); return
   }
@@ -173,6 +173,7 @@ process.stdin.on('data', (chunk) => {
       else { const prompt = input; input = ''; if (busy) { queued.push(prompt); record({ injected: prompt }) } else say(prompt) }
     } else {
       input += pasting && c === '\r' ? '\n' : c
+      if (busy && !pasting && input.includes('/m')) paint('Claude Code\n  /mcp    Manage MCP servers\n  /model  Switch model\n────────────────────\n❯ ' + input + '\n────────────────────\n  auto mode on\n')
       if (menu?.multiple && selection === 2) { menu.checked.add(2); choices() }
     }
   }

@@ -10,8 +10,8 @@ import { holdTmux } from '../index.mjs'
 import { claudeState, readClaude } from '../src/claude-runtime.mjs'
 
 const binary = (() => { try { return process.platform === 'win32' ? undefined : execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim() } catch { return undefined } })()
-const until = async (condition) => {
-  for (let i = 0; i < 500; i++) { if (await condition()) return; await delay(20) }
+const until = async (condition, attempts = 500) => {
+  for (let i = 0; i < attempts; i++) { if (await condition()) return; await delay(20) }
   throw new Error('Timed out waiting for input delivery')
 }
 async function fixture(id = randomUUID()) {
@@ -31,7 +31,7 @@ test('types through 80 Unicode characters, then types a 12-character prefix and 
   try {
     const short = '🙂'.repeat(80)
     f.driver.send(short)
-    await until(() => f.ended().length === 1)
+    await until(() => f.ended().length === 1, 1000)
     assert.equal((await f.logs()).some(e => e.pasteStarted !== undefined), false)
     const boundary = '界'.repeat(81)
     f.driver.send(boundary)
@@ -51,11 +51,26 @@ test('types through 80 Unicode characters, then types a 12-character prefix and 
   } finally { await f.cleanup() }
 })
 
+test('pastes short queued guidance without opening slash autocomplete', { skip: binary === undefined, timeout: 15000 }, async () => {
+  const f = await fixture()
+  try {
+    f.driver.send('hold')
+    await until(() => f.sent.includes('send'))
+    const text = "I don't see formula MCP in /mcp"
+    await f.driver.inject(text)
+    await until(async () => (await f.logs()).some(e => e.injected === text))
+    assert.deepEqual(f.sent, ['send', 'inject'])
+    assert.equal((await f.logs()).filter(e => e.injected).length, 1)
+    assert.deepEqual((await f.commands()).filter(args => args.includes('send-keys') && args.includes('-l')).map(args => args.at(-1)).join(''), 'hold')
+    assert.equal(f.buffers(), '')
+  } finally { await f.cleanup() }
+})
+
 test('pastes long Send now and checkbox custom input without premature submission', { skip: binary === undefined, timeout: 30000 }, async () => {
   const f = await fixture()
   try {
     f.driver.send('hold')
-    await until(async () => (await f.logs()).some(e => e.prompt === 'hold'))
+    await until(() => f.sent.includes('send'))
     const text = 'Guidance\n' + '界🙂 long text\n'.repeat(50)
     await f.driver.inject(text)
     await until(async () => (await f.logs()).some(e => e.injected === text))
@@ -82,7 +97,7 @@ test('failed Send now paste retains rejection, clears partial input and removes 
   const f = await fixture()
   try {
     f.driver.send('hold')
-    await until(async () => (await f.logs()).some(e => e.prompt === 'hold'))
+    await until(() => f.sent.includes('send'))
     await writeFile(join(f.folder, 'fail-paste'), '')
     await assert.rejects(f.driver.inject('long guidance '.repeat(20)), /Test paste failure/)
     await until(async () => (await f.logs()).some(e => e.clearedInput))

@@ -2038,7 +2038,7 @@ function terminalScreen(text2) {
   const trustFocus = lines.some((line) => /^\s*[❯›>]\s*No, exit\s*$/.test(line)) ? 0 : lines.some((line) => /^\s*[❯›>]\s*Yes, I trust this folder\s*$/.test(line)) ? 1 : -1;
   const prompt = lines.findLastIndex((line) => /^\s*[❯›>](?:\s|$)/.test(line) && !/^\s*[❯›>]\s*(?:\d+[.)]|\[[ ✓✔xX]\]\s+|(?:Submit|Next|Enable selected)\s*$)/.test(line));
   const selected = lines.findLastIndex((line) => /^\s*[❯›>]\s*(?:\d+[.)]\s+|(?:Submit|Next)\s*$)/.test(line));
-  const review = lines.some((line) => line.trim() === "Review your answers") && /(?:^|\n)\s*Ready to submit your answers\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Submit answers\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+Cancel\s*$/.test(lines.join("\n"));
+  const review = lines.some((line) => line.trim() === "Review your answers") && /(?:^|\n)\s*(?:[❯›>]\s*)?1[.)]\s+Submit answers\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+Cancel\s*$/.test(lines.join("\n"));
   const hookAt = lines.slice(0, selected).findLastIndex((line) => /^\s*(?:[│┃]\s*)?Hook PreToolUse:\S+ requires confirmation for this command:\s*$/.test(line));
   const hook = hookAt !== -1 && /(?:^|\n)\s*Do you want to proceed\?\s*\n\s*(?:[❯›>]\s*)?1[.)]\s+Yes\s*\n\s*(?:[❯›>]\s*)?2[.)]\s+No\s*(?:\n\s*Esc to cancel[^\n]*)?\s*$/.test(lines.slice(hookAt).join("\n"));
   const mcpAt = lines.findLastIndex((line) => /^\s*\d+ new MCP servers? found in this project\s*$/.test(line));
@@ -2081,7 +2081,7 @@ function terminalScreen(text2) {
     const first = group[0]?.at ?? selected;
     const border = lines.slice(0, first).findLastIndex((line) => /^\s*[─━-]{3}/.test(line));
     const above = lines.slice(border + 1, first).filter((line) => line.trim() !== "");
-    const title = (hook ? lines.slice(hookAt, first) : above.slice(-6)).map((line) => line.trim()).join("\n").trim() || "Choose an option";
+    const title = (hook ? lines.slice(hookAt, first) : review ? lines.slice(lines.findLastIndex((line, at2) => at2 < first && line.trim() === "Review your answers"), first) : above.slice(-6)).map((line) => line.trim()).join("\n").trim() || "Choose an option";
     const options = group.map(({ number, label, input }) => ({ number, label, ...input ? { input } : {} }));
     const focus = group.findIndex((option) => option.at === selected);
     const signature = JSON.stringify({ title, options });
@@ -2393,9 +2393,9 @@ function holdTmux(runtime, options, hear, left, sent = () => {
   };
   const keys = async (text2, ready = () => {
     if (ended2 || stopping) throw new Error("Claude Code session ended before input was sent.");
-  }, submit = true) => {
+  }, submit = true, prefix) => {
     const characters = Array.from(text2);
-    const pasteAt = characters.length > 80 ? 12 : characters.length;
+    const pasteAt = prefix ?? (characters.length > 80 ? 12 : characters.length);
     for (const character of characters.slice(0, pasteAt)) {
       await ready?.();
       if (character === "\n") {
@@ -2452,7 +2452,7 @@ function holdTmux(runtime, options, hear, left, sent = () => {
         await ready();
         const prompt = [...before, text2, ...paths.map((path) => `Image attachment: ${path}`)].join("\n\n");
         typed2 = true;
-        await keys(prompt, ready);
+        await keys(prompt, ready, true, 0);
         sent("inject");
         idle = 0;
       } catch (error) {
