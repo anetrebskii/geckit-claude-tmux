@@ -159,6 +159,10 @@ test('recognizes answer review without a navigation footer', async () => {
   assert(screen.title.includes('Local demo (Recommended)'))
   assert(screen.title.includes('Yes, edit both'))
   assert.equal(terminalScreen(review.replace('❯ 1.', '  1.').replace('  2. Cancel', '❯ 2. Cancel')).focus, 1)
+  const currentLayout = review.replace('Ready to submit your answers?\n', '')
+  const withDivider = (text) => (text.trimEnd() + '\n\n\n').split('\n').map((line) => line.padEnd(77) + '│').join('\n')
+  assert.deepEqual(terminalScreen(withDivider(currentLayout)), current)
+  assert.equal(terminalScreen(withDivider(currentLayout + '\n' + idle)).kind, 'idle')
   assert.equal(terminalScreen(review + '\n' + idle).kind, 'idle')
   assert.equal(terminalScreen('Example:\n❯ 1. Submit answers\n  2. Cancel\n').kind, 'unknown')
 })
@@ -180,8 +184,8 @@ test('submits or cancels native answer review through tmux', { skip: !available,
   const ended = () => signals().filter((signal) => signal.kind === 'ended')
   const logs = async () => (await readFile(join(folder, id + '.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
   try {
-    for (const [index, choice] of ['Submit answers', 'Cancel'].entries()) {
-      driver.send('review')
+    for (const [index, choice] of ['Submit answers', 'Cancel', 'Submit answers', 'Cancel'].entries()) {
+      driver.send(index < 2 ? 'review' : 'review-with-divider')
       await until(() => asks().length === index + 1)
       const ask = asks().at(-1)
       assert.deepEqual(ask.wanted.choices, ['Submit answers', 'Cancel'])

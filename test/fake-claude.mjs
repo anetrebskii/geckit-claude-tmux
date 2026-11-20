@@ -38,7 +38,8 @@ const choices = () => {
     paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i === 3 ? '   ' : `${i < 3 ? i + 1 : i}.`} ${i < 3 ? `[${menu.checked.has(i) ? '✓' : ' '}] ` : ''}${i === 2 && input ? input : label}`).join('\n')}\nEnter to select · ↑/↓ to navigate · Esc to cancel\n`)
     return
   }
-  paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review || menu.hook ? '' : '  Enter to select · Esc to cancel\n'}`)
+  const text = `${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review || menu.hook ? '' : '  Enter to select · Esc to cancel\n'}`
+  paint(menu.divider ? (text + '\n\n').split('\n').map((line) => line.padEnd(77) + '│').join('\n') : text)
 }
 const reply = (text) => {
   write({ type: 'assistant', uuid: 'reply-' + ++count, message: { model: 'claude-test', stop_reason: 'end_turn', content: [{ type: 'text', text }] } })
@@ -87,8 +88,8 @@ const say = (prompt) => {
     selection = 0
     choices(); return
   }
-  if (prompt === 'review') {
-    menu = { title: '────────────────────\n← ☒ Scope ☒ Files ✔ Submit →\n\nReview your answers\n\n ● Where should the demo run?\n   → Local demo (Recommended)\n ● May we edit both files?\n   → Yes, edit both\n', options: ['Submit answers', 'Cancel'], review: true }
+  if (prompt === 'review' || prompt === 'review-with-divider') {
+    menu = { title: '────────────────────\n← ☒ Scope ☒ Files ✔ Submit →\n\nReview your answers\n\n ● Where should the demo run?\n   → Local demo (Recommended)\n ● May we edit both files?\n   → Yes, edit both\n', options: ['Submit answers', 'Cancel'], review: true, divider: prompt === 'review-with-divider' }
     selection = 0
     choices(); return
   }
