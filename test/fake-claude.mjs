@@ -35,7 +35,8 @@ const idle = () => { busy = false; paint('Claude Code\n────────�
 const working = () => { busy = true; paint('Claude Code\n✶ Working…\n────────────────────\n❯\u00a0\n────────────────────\n') }
 const choices = () => {
   if (menu.multiple) {
-    paint(`${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i === 3 ? '   ' : `${i < 3 ? i + 1 : i}.`} ${i < 3 ? `[${menu.checked.has(i) ? '✓' : ' '}] ` : ''}${i === 2 && input ? input : label}`).join('\n')}\nEnter to select · ↑/↓ to navigate · Esc to cancel\n`)
+    const text = `${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i === 3 ? '   ' : `${i < 3 ? i + 1 : i}.`} ${i < 3 ? `[${menu.checked.has(i) ? '✓' : ' '}] ` : ''}${i === 2 && input ? input : label}`).join('\n')}\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n`
+    paint(menu.divider ? text.split('\n').map((line) => line.padEnd(77) + '│').join('\n') : text)
     return
   }
   const text = `${menu.title}\n${menu.options.map((label, i) => `${i === selection ? '❯' : ' '} ${i + 1}. ${label}`).join('\n')}\n${menu.review || menu.hook ? '' : '  Enter to select · Esc to cancel\n'}`
@@ -83,8 +84,8 @@ const say = (prompt) => {
     return
   }
   if (prompt === 'unknown') { paint('Unrecognized terminal state\n'); return }
-  if (prompt === 'checkbox' || prompt === 'checkbox-next') {
-    menu = { title: '────────────────────\n← ☐ Schedule ✔ Submit →\n\nWhich schedule options?', options: ['More intervals', 'Time of day', 'Type something', prompt === 'checkbox-next' ? 'Next' : 'Submit', 'Chat about this'], multiple: true, checked: new Set() }
+  if (['checkbox', 'checkbox-next', 'checkbox-with-divider'].includes(prompt)) {
+    menu = { title: '────────────────────\n← ☐ Schedule ✔ Submit →\n\nWhich schedule options?', options: ['More intervals', 'Time of day', 'Type something', prompt === 'checkbox-next' ? 'Next' : 'Submit', 'Chat about this'], multiple: true, checked: new Set(), divider: prompt === 'checkbox-with-divider' }
     selection = 0
     choices(); return
   }

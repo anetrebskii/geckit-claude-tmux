@@ -546,9 +546,9 @@ test('checkboxes toggle, submit explicitly, and accept native inline text throug
     return asks().at(-1)
   }
   try {
-    driver.send('checkbox')
+    driver.send('checkbox-with-divider')
     await until(() => asks().length === 1)
-    assert(asks()[0].wanted.choices.includes('Submit'))
+    assert.deepEqual(asks()[0].wanted.choices, ['[ ] More intervals', '[ ] Time of day', '[ ] Type something', 'Submit', 'Chat about this'])
     assert((await answer('[ ] More intervals')).wanted.choices.includes('[✓] More intervals'))
     assert((await answer('[ ] Time of day')).wanted.choices.includes('[✓] Time of day'))
     assert((await answer('[✓] More intervals')).wanted.choices.includes('[ ] More intervals'))

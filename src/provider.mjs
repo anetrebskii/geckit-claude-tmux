@@ -28,8 +28,9 @@ const plain = (text) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replaceAll(
 function terminalScreen(text) {
   const lines = plain(text).replace(/(Claude Code will automatically (?:deny|block) this request)\s+in\s+\d+:\d{2}(?=,\s+to avoid\b)/g, '$1').split('\n').map((line) => line.trimEnd())
   const bottom = lines.findLastIndex((line) => line !== '')
-  const rail = lines[bottom]
-  if (/^ +│$/.test(rail) && lines[bottom - 1] === rail) {
+  const emptyRail = /^ +│$/
+  const tail = lines.slice(Math.max(0, bottom - 1), bottom + 1)
+  if (tail.length === 2 && tail.every((line) => line.endsWith('│')) && tail.some((line) => emptyRail.test(line))) {
     for (let row = bottom; row >= 0 && lines[row].endsWith('│'); row--) {
       lines[row] = lines[row].slice(0, -1).trimEnd()
     }

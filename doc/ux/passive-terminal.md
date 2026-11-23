@@ -86,6 +86,7 @@ Question title and choices are Claude's native terminal text. Existing app label
 - Long-running tool or hook: retain Working while native busy indicators remain.
 - Fast answer: new transcript data provides turn activity even if no busy screen was sampled.
 - Stale question: recapture before answering; never select an option from an obsolete screen.
+- Checkbox questions keep their native Submit or Next action when the sidebar divider reaches the bottom of the pane. Selecting a checkbox updates the card. Submit or Next advances the native form.
 - Answer review: Claude's "Review your answers" screen can end with "Ready to submit your answers?", "Submit answers" and "Cancel" without a navigation footer. Show its existing question card with the review and exact choices. Choosing Submit answers sends Enter to the selected native option; choosing Cancel returns to the native question flow. Neither action happens automatically. A quoted review in a reply followed by an idle prompt is not a question.
 - Native workspace trust: recognize the exact trust prompt, move to Yes, wait 700 ms for native input to settle, and recapture the screen to confirm Yes is visibly selected before pressing Enter. If startup ignores the navigation key, retry without submitting No, exit.
 - Images: preserve temporary image paths and remove files after completion/stop.
